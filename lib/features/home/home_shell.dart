@@ -1,14 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../generate/generate_controllers.dart';
+
 /// Bottom navigation between the four main tabs.
-class HomeShell extends StatelessWidget {
+class HomeShell extends ConsumerWidget {
   const HomeShell({super.key, required this.shell});
 
   final StatefulNavigationShell shell;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Resume generation an earlier run of the app left unfinished.
+    ref.watch(generationBootstrapProvider);
     return Scaffold(
       body: shell,
       bottomNavigationBar: NavigationBar(

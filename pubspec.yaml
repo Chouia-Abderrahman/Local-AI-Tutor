@@ -44,6 +44,9 @@ dependencies:
   crypto: ^3.0.8
   pdfrx: ^2.4.8
   file_picker: ^13.4.0
+  fsrs: ^2.0.1
+  http: ^1.6.0
+  html: ^0.15.7
 
 dev_dependencies:
   flutter_test:

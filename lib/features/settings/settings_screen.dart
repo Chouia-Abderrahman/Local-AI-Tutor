@@ -30,6 +30,13 @@ class SettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.go('/settings/model'),
           ),
+          ListTile(
+            leading: const Icon(Icons.travel_explore),
+            title: const Text('Web access'),
+            subtitle: const Text('Off unless you turn it on'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.go('/settings/web'),
+          ),
           const AboutListTile(
             icon: Icon(Icons.info_outline),
             applicationName: 'PDF Study Assistant',

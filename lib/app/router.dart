@@ -1,14 +1,16 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../features/common/placeholder_screen.dart';
+import '../features/chat/chat_screen.dart';
 import '../features/home/home_shell.dart';
 import '../features/library/document_screen.dart';
 import '../features/library/library_screen.dart';
 import '../features/library/section_screen.dart';
 import '../features/model/model_lab_screen.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/study/session_screen.dart';
+import '../features/study/study_screen.dart';
+import '../features/web/web_settings_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final router = GoRouter(
@@ -47,11 +49,20 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: '/study',
-                builder: (context, state) => const PlaceholderScreen(
-                  title: 'Study',
-                  icon: Icons.school_outlined,
-                  message: 'Your study sessions will appear here.',
-                ),
+                builder: (context, state) => const StudyScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'session',
+                    builder: (context, state) => SessionScreen(
+                      documentId: int.tryParse(
+                        state.uri.queryParameters['doc'] ?? '',
+                      ),
+                      sectionId: int.tryParse(
+                        state.uri.queryParameters['section'] ?? '',
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -59,11 +70,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: '/chat',
-                builder: (context, state) => const PlaceholderScreen(
-                  title: 'Chat',
-                  icon: Icons.chat_bubble_outline,
-                  message: 'Chat about your documents will appear here.',
-                ),
+                builder: (context, state) => const ChatScreen(),
               ),
             ],
           ),
@@ -76,6 +83,10 @@ final routerProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: 'model',
                     builder: (context, state) => const ModelLabScreen(),
+                  ),
+                  GoRoute(
+                    path: 'web',
+                    builder: (context, state) => const WebSettingsScreen(),
                   ),
                 ],
               ),

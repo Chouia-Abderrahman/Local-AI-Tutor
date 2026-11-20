@@ -1,0 +1,274 @@
+import 'dart:io';
+
+import 'package:drift/drift.dart' hide isNull, isNotNull;
+import 'package:drift/native.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:pdf_study_assistant/core/db/database.dart';
+import 'package:pdf_study_assistant/core/generate/generation_repository.dart';
+import 'package:pdf_study_assistant/core/generate/json_model.dart';
+import 'package:pdf_study_assistant/core/generate/profile.dart';
+import 'package:pdf_study_assistant/core/generate/runner.dart';
+import 'package:pdf_study_assistant/core/ingest/importer.dart';
+import 'package:pdf_study_assistant/core/llm/llm_engine.dart';
+
+/// Writes plausible output for any passage: facts from its first sentences,
+/// one question per fact, and correct blind answers.
+class _FakeTeacher implements JsonModel {
+  final List<String> stages = [];
+  final Map<String, String> _answers = {};
+  bool failFacts = false;
+  void Function(String stage)? onCall;
+
+  @override
+  String get modelName => 'fake-teacher';
+
+  @override
+  Future<Map<String, Object?>> json({
+    required String stage,
+    required List<LlmMessage> messages,
+    required Map<String, Object?> schema,
+    required int maxTokens,
+    double temperature = 0.2,
+  }) async {
+    stages.add(stage);
+    onCall?.call(stage);
+    final text = messages.last.text;
+    switch (stage) {
+      case 'facts':
+        if (failFacts) throw LlmException('model crashed');
+        final passage = RegExp(
+          r'<<<\n([\s\S]*?)\n>>>',
+        ).firstMatch(text)!.group(1)!;
+        final sentences = passage
+            .split(RegExp(r'(?<=\.)\s+'))
+            .where((s) => s.split(' ').length > 4)
+            .take(2);
+        return {
+          'facts': [
+            for (final s in sentences)
+              {
+                'quote': s,
+                'statement': s,
+                'key_term': _longestWord(s),
+                'importance': 2,
+                'front': 'Name the key term of this idea.',
+                'back': _longestWord(s),
+              },
+          ],
+        };
+      case 'mcq':
+        final facts = RegExp(
+          r'^(\d+)\. \[\w+\] (.+?) \(source:',
+          multiLine: true,
+        ).allMatches(text);
+        return {
+          'questions': [
+            for (final f in facts)
+              () {
+                final question =
+                    'Which term matters most in idea ${f.group(1)} of ${text.hashCode}?';
+                final answer = _longestWord(f.group(2)!);
+                _answers[question] = answer;
+                return {
+                  'fact': int.parse(f.group(1)!),
+                  'question': question,
+                  'answer': answer,
+                  'distractors': ['alpha', 'beta', 'gamma'],
+                  'explanation': 'It is in the passage.',
+                };
+              }(),
+          ],
+        };
+      case 'blind':
+        final blocks = RegExp(
+          r'^(\d+)\. (.+)\nA\) (.+)\nB\) (.+)\nC\) (.+)\nD\) (.+)$',
+          multiLine: true,
+        ).allMatches(text);
+        return {
+          'answers': [
+            for (final b in blocks)
+              {
+                'question': int.parse(b.group(1)!),
+                'choice':
+                    'ABCD'[[
+                      for (var i = 3; i <= 6; i++) b.group(i),
+                    ].indexOf(_answers[b.group(2)])],
+              },
+          ],
+        };
+    }
+    throw StateError(stage);
+  }
+
+  static String _longestWord(String s) =>
+      (s
+              .replaceAll(RegExp(r'[^\p{L}\s]', unicode: true), '')
+              .split(RegExp(r'\s+'))
+            ..sort((a, b) => b.length.compareTo(a.length)))
+          .first;
+}
+
+void main() {
+  late AppDatabase db;
+  late Directory storage;
+  late GenerationRepository repo;
+  late _FakeTeacher teacher;
+  late int documentId;
+
+  setUp(() async {
+    db = AppDatabase(NativeDatabase.memory());
+    storage = Directory.systemTemp.createTempSync('runner');
+    repo = GenerationRepository(db);
+    teacher = _FakeTeacher();
+    final notes = File('${storage.path}/notes.md')
+      ..writeAsStringSync(
+        '# Cells\n\nOsmosis moves water across selectively permeable membranes. '
+        'Hypotonic solutions make animal cells swell and sometimes burst.\n\n'
+        '# Energy\n\nMitochondria produce most of the ATP in eukaryotic cells. '
+        'Glycolysis splits glucose into two pyruvate molecules.\n',
+      );
+    final result = await DocumentImporter(
+      db: db,
+      storageDir: storage,
+      extractPdf: (path, {required title, onProgress}) =>
+          throw UnimplementedError(),
+    ).importFile(notes.path);
+    documentId = result.documentId;
+  });
+
+  tearDown(() async {
+    await db.close();
+    storage.deleteSync(recursive: true);
+  });
+
+  GenerationRunner runner(JsonModel model) =>
+      GenerationRunner(repo: repo, prepareModel: () async => model);
+
+  test('Standard: facts for every passage first, then questions', () async {
+    final r = runner(CachedJsonModel(teacher, db));
+    final jobId = await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.standard),
+    );
+    await r.idle();
+
+    expect(teacher.stages, ['facts', 'facts', 'mcq', 'blind', 'mcq', 'blind']);
+    final facts = await db.select(db.facts).get();
+    expect(facts, hasLength(4));
+    final questions = await db.select(db.questions).get();
+    final types = questions.map((q) => q.type).toList();
+    expect(types.where((t) => t == 'mcq'), hasLength(4));
+    expect(types.where((t) => t == 'cloze'), hasLength(4));
+    expect(types.where((t) => t == 'flashcard'), hasLength(4));
+    expect(questions.every((q) => q.modelId == 'fake-teacher'), isTrue);
+
+    final summary = (await repo.summary(jobId!))!;
+    expect(summary.job.status, 'done');
+    expect(summary.done, summary.total);
+    // Live queries (the progress card) see the job finish.
+    expect(await repo.watchOpenJobs(documentId).first, isEmpty);
+    final counts = await repo.countsBySection(documentId);
+    expect(counts.values.map((c) => c.mcq), [2, 2]);
+  });
+
+  test('an interrupted item is resumed after a restart', () async {
+    final jobId = await repo.createJob(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.quick),
+    );
+    // Simulate an app killed in the middle of an item.
+    await (db.update(db.jobItems)..where((i) => i.jobId.equals(jobId!))).write(
+      const JobItemsCompanion(status: Value('running')),
+    );
+    final r = runner(teacher);
+    await r.resumePending();
+    await r.idle();
+    expect((await repo.summary(jobId!))!.job.status, 'done');
+    expect(await db.select(db.facts).get(), hasLength(4));
+  });
+
+  test('a failing item is retried, then marked failed', () async {
+    teacher.failFacts = true;
+    final r = runner(teacher);
+    final jobId = await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.quick),
+    );
+    await r.idle();
+    final summary = (await repo.summary(jobId!))!;
+    expect(summary.failed, 2);
+    expect(summary.job.status, 'done');
+    final items = await db.select(db.jobItems).get();
+    expect(items.every((i) => i.attempts == 2 && i.error != null), isTrue);
+  });
+
+  test('re-running a stage reuses cached model output', () async {
+    final cached = CachedJsonModel(teacher, db);
+    final first = runner(cached);
+    await first.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.quick),
+    );
+    await first.idle();
+    expect(teacher.stages, ['facts', 'facts']);
+    // Facts deleted (for example by a model change), then generated again.
+    await db.delete(db.facts).go();
+    final r = runner(cached);
+    await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.quick),
+    );
+    await r.idle();
+    expect(teacher.stages, ['facts', 'facts'], reason: 'no new model calls');
+    expect(cached.hits, 2);
+    expect(await db.select(db.facts).get(), hasLength(4));
+  });
+
+  test('no model: the runner waits with a message', () async {
+    final r = GenerationRunner(repo: repo, prepareModel: () async => null);
+    await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.quick),
+    );
+    await r.idle();
+    expect(r.state.message, contains('Load an AI model'));
+    expect(await repo.hasQueuedWork(), isTrue);
+  });
+
+  test(
+    'pausing mid-item (for the chat) stops at the next model call',
+    () async {
+      final cached = CachedJsonModel(teacher, db);
+      final r = runner(cached);
+      var paused = false;
+      teacher.onCall = (stage) {
+        if (stage == 'mcq' && !paused) {
+          paused = true;
+          r.pause(); // The chat takes the model while the mcq call runs.
+        }
+      };
+      final jobId = await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.standard),
+      );
+      await r.idle();
+      // Stopped before the blind call; the item went back to the queue.
+      expect(teacher.stages, ['facts', 'facts', 'mcq']);
+      expect((await repo.summary(jobId!))!.remaining, 2);
+
+      r.resume();
+      await r.idle();
+      // The finished mcq call came from the cache; the rest ran normally.
+      expect(teacher.stages, [
+        'facts',
+        'facts',
+        'mcq',
+        'blind',
+        'mcq',
+        'blind',
+      ]);
+      expect((await repo.summary(jobId))!.job.status, 'done');
+      expect(cached.hits, 1);
+    },
+  );
+}

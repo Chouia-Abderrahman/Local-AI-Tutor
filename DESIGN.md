@@ -211,11 +211,12 @@ The UI shows the four presets as a segmented control, and "Custom…" opens the 
 **Ratings sent to FSRS:**
 - Flashcard and cloze: you rate Again, Hard, Good or Easy. Typed cloze answers are checked automatically.
 - Multiple choice: wrong is Again, right is Good, right but slow or marked unsure is Hard. Never Easy, since recognizing an answer is weaker evidence than recalling it.
+- A missed card (Again) comes back a few cards later in the same session, worded differently when the fact has another question. Cards answered right come back in a later session, when FSRS says they are due.
 
 **Feedback** comes right after every answer: the correct answer, the source quote with its page (tap to open the page with the sentence highlighted), and the explanation for the chosen level. Buttons: Report, Upgrade, Explain in chat.
 
 **Mastery per topic:**
-- *Recall now* (the headline %): mean FSRS retrievability over the topic's facts, counting unseen facts as 0. It drops over time if you don't review.
+- *Mastery* (the headline %): the chance of still recalling the topic's facts a week from now (FSRS retrievability seven days ahead), counting unseen facts as 0. Recall *now* was the first idea, but right after you miss a fact FSRS still predicts 90%+ recall because you have just seen the answer, which hides exactly the gaps the map is for. Looking a week ahead reflects how well a fact is learned, and still fades when you stop reviewing.
 - *Coverage*: facts seen divided by facts in the topic.
 - *Durable*: the share of facts with stability of 21 days or more.
 - Parent topics roll up their children, weighted by fact count. A topic with fewer than 3 facts gets a "few items" badge instead of a confident color.
@@ -233,13 +234,15 @@ The UI shows the four presets as a segmented control, and "Custom…" opens the 
 
 Chat and flashcards share the same facts, so both feed one mastery map.
 
+As built (M5): retrieval is FTS5 alone, with stemmed prefix terms so "osmotic" finds "osmosis"; embeddings can come later. A sentence that cites an excerpt that wasn't given (on the emulator the 0.8B model invented "[5]" with three excerpts and a false inventor of the microscope) counts as unsupported, and a reply that is mostly unsupported counts as "not covered", which offers the web search and hides "Save as card". A chat message pauses background generation (its current step is cancelled and retried later) so the reply doesn't wait behind it. Quiz-me mode is not built yet.
+
 ## 12. Web access and fact-checking
 
 The model never browses on its own. The app runs a fixed pipeline and asks the model only to fill small, schema-constrained slots. With small models this is more reliable than tool calling, and it limits what a malicious page can do.
 
 1. **Claim**: a statement built from a question and its answer, or a sentence from a chat answer.
 2. **Query**: one or two short search queries (model, schema-constrained). Whole passages from the document are never sent.
-3. **Search**: Wikipedia's API first, in the document's language. Then, if configured, a general web provider: a SearXNG instance you run, or a search API with your key (Brave, Tavily or similar).
+3. **Search**: Wikipedia's API first, in the document's language. Then, if configured, a SearXNG instance you run. (Search APIs that need a key, such as Brave or Tavily, are not built yet.)
 4. **Fetch** the top 3-5 results with timeouts, a 2 MB cap, HTML or plain text only, robots.txt respected, cached for 7 days. Main text is extracted (Wikipedia through its plain-text API, other sites with a readability-style heuristic).
 5. **Rank** passages against the claim and keep the best 3.
 6. **Judge** each passage: `{verdict: supports | contradicts | unrelated, quote}`.
@@ -326,3 +329,5 @@ M0, on the development laptop (Ryzen 7 PRO 4750U, llama.cpp on the integrated GP
 
 - Grammar-constrained JSON: 32 s per question with the 0.8B model against 7 s for the fast path (sampling took 18 s of the 32).
 - Prompt-prefix reuse: 0% for both models (hybrid architecture).
+
+M2 eval, 4B model, Standard, on the fixture textbook (4 short passages, laptop): 8 facts, all with verified quotes; 8 cloze cards, 8 flashcards, 6 multiple-choice questions, all passing the blind check; 2 multiple-choice questions rejected for length bias (correct answer about twice as long as the wrong ones), which led to a shorter-answer rule in prompt version 2. Time per passage: facts 77 s, questions 102 s, blind check 15 s (3.2 min in all).
