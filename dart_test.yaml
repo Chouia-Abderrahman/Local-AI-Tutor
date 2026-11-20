@@ -1,0 +1,4 @@
+tags:
+  model:
+    # Runs a real model file from models/. Slow; excluded by default.
+    timeout: 20m
