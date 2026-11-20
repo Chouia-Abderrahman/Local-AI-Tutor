@@ -56,3 +56,7 @@ String formatDuration(Duration d) {
   final minutes = d.inMinutes % 60;
   return '${d.inHours} h${minutes == 0 ? '' : ' $minutes min'}';
 }
+
+/// An estimate for display: "under a minute", "about 6 min", "about 2 h".
+String approxDuration(Duration d) =>
+    d.inMinutes < 1 ? 'under a minute' : 'about ${formatDuration(d)}';

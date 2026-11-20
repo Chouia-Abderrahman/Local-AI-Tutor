@@ -1,6 +1,7 @@
 import 'package:pdfrx/pdfrx.dart';
 
 import 'extracted.dart';
+import 'ocr.dart';
 import 'text_cleanup.dart';
 
 /// Reads a PDF's text (in reading order, one [TextLine] per line) and its
@@ -8,10 +9,13 @@ import 'text_cleanup.dart';
 ///
 /// In the app, `pdfrxFlutterInitialize()` must run before this is used.
 class PdfExtractor {
+  /// With [ocr], pages with almost no text (scanned pages) are read by
+  /// text recognition instead.
   static Future<ExtractedDocument> extract(
     String path, {
     required String title,
     void Function(int done, int total)? onProgress,
+    PageOcr? ocr,
   }) async {
     final doc = await PdfDocument.openFile(path);
     try {
@@ -19,7 +23,24 @@ class PdfExtractor {
       final total = doc.pages.length;
       for (final page in doc.pages) {
         final text = await page.loadStructuredText();
-        pages.add(_pageText(page, text));
+        var pageText = _pageText(page, text);
+        if (ocr != null && pageText.charCount < 20) {
+          try {
+            final lines = await ocr.readPage(doc, page.pageNumber);
+            if (lines.isNotEmpty) {
+              pageText = PageText(
+                number: page.pageNumber,
+                width: page.width,
+                height: page.height,
+                lines: lines,
+                hasImages: true,
+              );
+            }
+          } on Object {
+            // Keep the empty page; the import reports it as unreadable.
+          }
+        }
+        pages.add(pageText);
         onProgress?.call(page.pageNumber, total);
       }
       final outline = <OutlineEntry>[];

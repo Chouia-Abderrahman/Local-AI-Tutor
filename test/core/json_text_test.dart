@@ -55,4 +55,46 @@ void main() {
       '"tags": ["...", ...]}',
     );
   });
+
+  test('coerceToSchema repairs small-model near-misses', () {
+    const schema = {
+      'type': 'object',
+      'properties': {
+        'importance': {'type': 'integer', 'minimum': 1, 'maximum': 3},
+        'verdict': {
+          'type': 'string',
+          'enum': ['supports', 'contradicts'],
+        },
+        'tags': {
+          'type': 'array',
+          'items': {'type': 'string'},
+          'maxItems': 2,
+        },
+        'ok': {'type': 'boolean'},
+        'name': {'type': 'string'},
+      },
+      'additionalProperties': false,
+    };
+    expect(
+      coerceToSchema({
+        'importance': '5',
+        'verdict': 'Supports.',
+        'tags': ['a', 'b', 'c'],
+        'ok': 'true',
+        'name': 42,
+        'extra': 'dropped',
+      }, schema),
+      {
+        'importance': 3,
+        'verdict': 'supports',
+        'tags': ['a', 'b'],
+        'ok': true,
+        'name': '42',
+      },
+    );
+    // Unfixable values are left for the validator.
+    expect(coerceToSchema({'importance': 'high'}, schema), {
+      'importance': 'high',
+    });
+  });
 }

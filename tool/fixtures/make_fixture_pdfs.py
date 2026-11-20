@@ -3,7 +3,10 @@
 The text is written for these fixtures. textbook.pdf has bookmarks, running
 headers and footers, a contents page and a references section.
 textbook_no_outline.pdf has the same pages without bookmarks, so the importer
-has to find headings from font sizes and numbering.
+has to find headings from font sizes and numbering. scanned.pdf has only
+images of text, for the text recognition (OCR) path.
+
+Needs reportlab, Pillow and the Liberation fonts.
 """
 import os
 
@@ -126,8 +129,45 @@ def build(path, with_outline):
     )
 
 
+def build_scanned(path):
+    """A two-page PDF whose pages are only images of text, like a scan."""
+    from PIL import Image, ImageDraw, ImageFont
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+
+    font_path = "/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
+    title = ImageFont.truetype(font_path, 56)
+    body = ImageFont.truetype(font_path, 36)
+    pages = [
+        ("Photosynthesis", [
+            "Photosynthesis is the process by which plants use light",
+            "energy to make glucose from carbon dioxide and water.",
+            "It takes place in the chloroplasts of leaf cells.",
+            "Oxygen is released as a by-product of the process.",
+        ]),
+        ("Chlorophyll", [
+            "Chlorophyll is the green pigment that absorbs light.",
+            "It absorbs mostly red and blue light and reflects green.",
+        ]),
+    ]
+    c = canvas.Canvas(path, pagesize=A4)
+    for heading, lines in pages:
+        img = Image.new("RGB", (1240, 1754), "white")
+        draw = ImageDraw.Draw(img)
+        draw.text((120, 140), heading, font=title, fill="black")
+        y = 260
+        for line in lines:
+            draw.text((120, y), line, font=body, fill="black")
+            y += 60
+        c.drawImage(ImageReader(img), 0, 0, width=A4[0], height=A4[1])
+        c.showPage()
+    c.save()
+
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     build(os.path.join(OUT, "textbook.pdf"), with_outline=True)
     build(os.path.join(OUT, "textbook_no_outline.pdf"), with_outline=False)
+    build_scanned(os.path.join(OUT, "scanned.pdf"))
     print("wrote", sorted(os.listdir(OUT)))

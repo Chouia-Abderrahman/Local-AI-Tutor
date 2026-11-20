@@ -62,7 +62,8 @@ class _GenerateSheetState extends ConsumerState<_GenerateSheet> {
           speed: s,
         );
         estimate =
-            '${scope.length} passages · about ${formatDuration(time)}'
+            '${scope.length} ${scope.length == 1 ? 'passage' : 'passages'} · '
+            '${approxDuration(time)}'
             '${s.measured ? '' : ' (rough guess: run the speed test in Settings for a better one)'}';
       }
     }

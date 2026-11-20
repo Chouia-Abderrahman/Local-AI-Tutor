@@ -78,3 +78,67 @@ String _shape(Object? node) {
   }
   return '<value>';
 }
+
+/// Repairs common near-misses of small models so the reply passes schema
+/// validation without a slow constrained retry: numbers written as text,
+/// integers out of range (clamped), too many array items (truncated), and
+/// fields the schema doesn't allow (dropped). Anything else is left as is
+/// for the validator to reject.
+Object? coerceToSchema(Object? value, Object? schema) {
+  if (schema is! Map) return value;
+  final type = schema['type'];
+  switch (type) {
+    case 'object':
+      if (value is! Map) return value;
+      final properties = (schema['properties'] as Map?) ?? const {};
+      final strict = schema['additionalProperties'] == false;
+      return {
+        for (final entry in value.entries)
+          if (!strict || properties.containsKey(entry.key))
+            '${entry.key}': coerceToSchema(entry.value, properties[entry.key]),
+      };
+    case 'array':
+      if (value is! List) return value;
+      final max = schema['maxItems'];
+      final items = [
+        for (final item in value) coerceToSchema(item, schema['items']),
+      ];
+      return max is int && items.length > max ? items.sublist(0, max) : items;
+    case 'integer':
+      final number = value is num
+          ? value.round()
+          : value is String
+          ? int.tryParse(value.trim()) ?? double.tryParse(value.trim())?.round()
+          : null;
+      if (number == null) return value;
+      final min = schema['minimum'];
+      final max = schema['maximum'];
+      var result = number;
+      if (min is num && result < min) result = min.ceil();
+      if (max is num && result > max) result = max.floor();
+      return result;
+    case 'number':
+      return value is String ? (double.tryParse(value.trim()) ?? value) : value;
+    case 'string':
+      final options = schema['enum'];
+      if (value is String && options is List && !options.contains(value)) {
+        // "Supports" or "supports." for the enum value "supports".
+        final key = value.trim().toLowerCase().replaceAll(
+          RegExp(r'[^\p{L}\p{N}]', unicode: true),
+          '',
+        );
+        for (final option in options) {
+          if ('$option'.toLowerCase() == key) return option;
+        }
+      }
+      return value is num || value is bool ? '$value' : value;
+    case 'boolean':
+      if (value is String) {
+        final v = value.trim().toLowerCase();
+        if (v == 'true') return true;
+        if (v == 'false') return false;
+      }
+      return value;
+  }
+  return value;
+}

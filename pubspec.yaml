@@ -47,6 +47,9 @@ dependencies:
   fsrs: ^2.0.1
   http: ^1.6.0
   html: ^0.15.7
+  flutter_foreground_task: ^11.0.3
+  google_mlkit_text_recognition: ^1.0.3
+  battery_plus: ^7.1.2
 
 dev_dependencies:
   flutter_test:

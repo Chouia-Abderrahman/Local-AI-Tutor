@@ -1,4 +1,5 @@
 tags:
   model:
-    # Runs a real model file from models/. Slow; excluded by default.
+    # Runs a real model file from models/. Skipped unless TEST_MODEL names
+    # one; run alone with `flutter test --tags model`.
     timeout: 20m

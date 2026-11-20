@@ -1,6 +1,6 @@
 # PDF Study Assistant: Design
 
-Status: draft for review, 2026-11-20. Nothing is implemented yet.
+Status, 2026-11-20: built through M7. "As built" notes mark where the app differs from the plan, and section 15 lists what isn't built yet.
 
 ## 1. What it does
 
@@ -75,7 +75,7 @@ The pipeline is plain Dart behind interfaces (`LlmEngine`, `OcrEngine`, `SearchP
 ## 5. Import pipeline
 
 1. **Extract** with pdfrx: per-page text in reading order with character boxes, plus the outline. A character-to-(page, box) map is kept so any quote can be highlighted later.
-2. **Scanned pages**: a page with almost no text is flagged at import. Rendering it at about 2x and running OCR on it comes in M7.
+2. **Scanned pages**: a page with fewer than 20 characters of text is rendered at 2x and read with ML Kit text recognition. The recognized line boxes are scaled back to PDF points, so heading detection works as it does on text pages. ML Kit's bundled model reads Latin script only. If recognition fails, the page stays flagged as unreadable. (M7, on the emulator: a two-page scanned fixture came back word for word, with both headings found.)
 3. **Clean**: Unicode NFKC (ﬁ becomes fi), straight quotes, hyphenated line breaks joined (`exam-` + `ple` becomes `example`), paragraphs rebuilt from vertical gaps, running headers and footers removed (lines repeated at the same position on 40%+ of pages, with digits normalized so page numbers match).
 4. **Language**: detected per document. Prompts ask for output in that language and a check rejects output in another one.
 5. **Structure**: the section tree comes from the PDF outline. Without one, heading detection (taller glyphs, short line, numbering like `3.2`, body text after it). Without headings (plain text, slides), the model labels each chunk with a 2-5 word topic and consecutive chunks with the same label are merged.
@@ -110,6 +110,8 @@ Prompt layout is `[system rules][chunk][task]`, and each chunk gets as few model
 
 JSON comes from a fast path: the prompt shows the expected shape, the reply is extracted and validated against the schema in Dart, and only a reply that fails validation is retried with grammar-constrained decoding. llamadart 0.20 applies the grammar to the whole vocabulary on every token, which made a question about 4.5x slower in M0 (32 s against 7 s with the 0.8B model on the laptop).
 
+As built (M7): before falling back to the grammar, the engine repairs common near-misses (numbers written as text, integers out of range, too many array items, fields the schema doesn't allow, enum values with different case or punctuation) and gives the fast path a second try at a higher temperature. A Quick run on the emulator had been much slower than expected, probably because of grammar retries. After the change, the 0.8B model's test question on the laptop needed no retry.
+
 Prompts are versioned. Every stored item records the model, prompt version and profile that produced it.
 
 ## 7. Verification
@@ -118,7 +120,7 @@ Code checks, at every level:
 
 | Check | Rule |
 |---|---|
-| Schema | Constrained decoding, then validation |
+| Schema | Fast path: validation, then repair, then a second try; constrained decoding only as a fallback (section 6.2) |
 | Quote found | Normalize both sides (NFKC, case, quotes, whitespace, hyphens), try an exact search, then a fuzzy partial match of 0.92 or higher |
 | Answer grounded | For Recall and Understand, most content words of the answer (60%+) appear in the quote or fact. Apply and Analyze questions rely on the blind check instead |
 | Distractors | Three distinct options, none nearly equal to the answer (similarity below 0.85), no "all/none of the above" or "both A and B" |
@@ -200,9 +202,9 @@ The UI shows the four presets as a segmented control, and "Custom…" opens the 
 - Two passes by default. Quick runs over the chosen scope first so you can study within minutes, then your chosen quality refines it in the background. Upgrades attach to the same facts, so review history is kept.
 - Per-section quality can be set from the outline or the mastery map ("Deep on this chapter").
 - **Upgrade this question** re-runs one fact at a higher level. **Report bad question** retires the question (and the fact, if the fact itself is wrong) and queues a replacement.
-- Optional power policy: while charging, continue and upgrade weak topics. Below 30% battery, pause or run Quick only.
+- Power policy, as built (M7): at 20% battery or less, when the phone isn't charging, generation pauses with a message saying why. It resumes when the phone charges or is back at 30%. A charger that is connected but not charging (a hot battery, for one) counts as not charging; the emulator also reports that state with no charger at all. If you resume or pause by hand in between, your choice stands until the battery recovers. Upgrading weak topics while charging is not built. Testing note: battery_plus reads the level from the battery service, which `adb shell dumpsys battery set` doesn't change, so on the emulator the policy is tested with `adb emu power capacity|status|ac`. Verified that way in a release build: paused at 15%, and shown as working again as soon as the emulator was plugged in.
 - Jobs are persisted as small idempotent items (one chunk, one stage). Outputs are cached by `hash(chunk text, model, prompt version, stage params)`. If the app is killed, it resumes after the last finished item.
-- On Android, long runs use a foreground service with a progress notification. Recent Android versions also cap some service types per day, which resumable jobs absorb.
+- On Android, long runs use a foreground service with a progress notification. As built (M7): a `dataSync` service (flutter_foreground_task) with a partial wake lock runs while the runner works and stops when it stops. Generation itself stays in the app's main isolate; the service only keeps the process alive (verified on the emulator: generation kept going with the app in the background). Android 15 and later allow a data-sync service 6 hours a day. When that runs out the plugin stops the service, generation goes on while the app is open, the service starts again the next time it can, and a job that Android stops resumes from its last finished item.
 
 ## 10. Study, scheduling and mastery
 
@@ -291,8 +293,8 @@ models             id, name, path, kind (chat|embed), bytes, quant, bench_prompt
 
 - **Unit tests** in plain Dart, no model needed: normalization, de-hyphenation, header and footer removal, heading detection, chunking, the quote matcher, every check, the cloze builder, option shuffling, the FSRS rating mapping, mastery roll-up, retrieval fusion, job resume.
 - **Pipeline tests** with a `FakeLlmEngine` that returns scripted JSON, including malformed and adversarial output.
-- **Fixtures**: a few small, openly licensed PDFs: a textbook chapter, a slide deck, a scanned page and a non-English text.
-- **Eval tool** (`tool/eval.dart`): runs on the laptop with the same model files the phone uses, over the fixtures at each quality level. It reports the acceptance rate per check and blind-check agreement, and writes 20 random questions to a markdown file for rating by hand. Speed comes from the in-app benchmark on the phone, never from the laptop. Together they decide whether Thorough and Deep are worth their cost.
+- **Fixtures**: a few small, openly licensed PDFs: a textbook chapter, a slide deck, a scanned page and a non-English text. As built: `tool/fixtures/make_fixture_pdfs.py` generates a textbook (with and without bookmarks) and a scanned two-page PDF. The slide deck and the non-English text are still to do.
+- **Eval tool** (as built: `test/integration/eval_test.dart`, run with `TEST_MODEL=<model file>` and `--tags model`): runs on the laptop with the same model files the phone uses, over the fixtures at each quality level. It reports the acceptance rate per check and blind-check agreement, and writes 20 random questions to a markdown file for rating by hand. Speed comes from the in-app benchmark on the phone, never from the laptop. Together they decide whether Thorough and Deep are worth their cost.
 - **In the app**: the report rate per quality level and model.
 
 ## 15. Milestones
@@ -308,14 +310,22 @@ models             id, name, path, kind (chat|embed), bytes, quant, bench_prompt
 | M6 | Web | Providers, fetch/extract/cache, fact-check pipeline, conflict view, web in chat, activity log |
 | M7 | Polish | Text recognition for scanned pages (moved from M1), power policy, Android foreground service, settings, CSV export (Anki later), presets tuned from eval results |
 
+Status, 2026-11-20: M0 to M7 are built (M2 to M6 share one commit). Release builds need the R8 rules in `android/app/proguard-rules.pro`: ML Kit refers to script recognizers the app doesn't bundle, and creates its components by reflection, so without them the build fails and then text recognition fails at runtime. Verified in a release build on the emulator: text recognition of a scanned page, the foreground service notification, and the battery pause. Not built yet:
+
+- Study: opening the source page with the sentence highlighted (feedback shows the quote and its page number), Upgrade this question, a replacement queued after a report, and a buffer of ready cards kept ahead of a session.
+- Chat: the Quiz me and Summarize section modes, and embeddings (retrieval is FTS5 alone).
+- Web: search providers that need a key (Brave, Tavily).
+- Polish: CSV and Anki export, and Wi-Fi-only downloads (the model screen warns about mobile data instead). Presets are tuned only by the M2 eval so far (prompt version 2).
+- Release: a real application ID (still `com.example`), release signing, and measurements on a real phone. Builds should target arm64 and x86_64 only (`--target-platform android-arm64,android-x64`): llamadart has no 32-bit ARM libraries. The arm64 APK is 94 MB, 25 MB of it llama.cpp's Vulkan backend, which hasn't been compared with the CPU backend on a phone yet.
+
 ## 16. Risks and open questions
 
 - **Multiple-choice quality from small models**, especially distractors and non-English documents. Measured in M2. Quick (cloze and flashcards) is the fallback that always works.
 - **No prompt-prefix reuse with Qwen3.5** (hybrid architecture). Every call re-reads its chunk, so calls per chunk are batched. A pure-attention model family would get reuse; worth re-checking when new small models ship.
 - **llamadart moves fast**, and its grammar sampler is slow (whole vocabulary per token). The JSON fast path avoids it; worth reporting upstream.
-- **Phone heat and battery** on long runs. Handled by resumable jobs and the power policy.
+- **Phone heat and battery** on long runs. Handled by resumable jobs and the power policy. Heat isn't measured; the battery level is the only signal.
 - **Equations, tables and figures** don't survive text extraction. They are flagged for now. Page images with a vision model could come later.
-- **Model downloads are 1-3 GB.** Wi-Fi only by default, with resumable downloads.
+- **Model downloads are 0.5-2.7 GB.** The model screen warns about mobile data; Wi-Fi-only downloads are not built.
 - **Licenses**: pdfrx/PDFium and llamadart are permissive. fllamer is GPL-3.0, which would make a distributed app GPL. ML Kit has Google's terms, and each model has its own license.
 
 ## 17. Measurements
@@ -331,3 +341,5 @@ M0, on the development laptop (Ryzen 7 PRO 4750U, llama.cpp on the integrated GP
 - Prompt-prefix reuse: 0% for both models (hybrid architecture).
 
 M2 eval, 4B model, Standard, on the fixture textbook (4 short passages, laptop): 8 facts, all with verified quotes; 8 cloze cards, 8 flashcards, 6 multiple-choice questions, all passing the blind check; 2 multiple-choice questions rejected for length bias (correct answer about twice as long as the wrong ones), which led to a shorter-answer rule in prompt version 2. Time per passage: facts 77 s, questions 102 s, blind check 15 s (3.2 min in all).
+
+M7, after the JSON repair, 0.8B model on the laptop with the Android emulator running alongside: reads 256 tokens/s, writes 15.7 tokens/s, 14-16 s per question, valid JSON with no constrained retry.

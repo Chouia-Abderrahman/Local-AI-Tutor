@@ -51,7 +51,12 @@ class GenerationRunner {
   final _states = StreamController<RunnerState>.broadcast();
   RunnerState _state = const RunnerState();
   bool _paused = false;
+  String? _pauseReason;
   Future<void>? _loop;
+
+  /// Set when [kick] is called while a loop runs; the loop may already be
+  /// on its way out, so it starts again once it ends.
+  bool _kickAgain = false;
 
   /// Seconds per finished item, per stage, for time estimates.
   final Map<String, List<double>> _durations = {};
@@ -74,6 +79,7 @@ class GenerationRunner {
     );
     if (jobId != null) {
       _paused = false;
+      _pauseReason = null;
       kick();
     }
     return jobId;
@@ -85,13 +91,42 @@ class GenerationRunner {
     if (await repo.hasQueuedWork()) kick();
   }
 
-  void pause() {
+  /// Pauses after the current model call. [reason] is shown to the user
+  /// (for example, low battery).
+  void pause({String? reason}) {
     _paused = true;
-    _emit(_copy(paused: true));
+    _pauseReason = reason;
+    _emit(
+      RunnerState(
+        paused: true,
+        message: reason,
+        jobId: _state.jobId,
+        stage: _state.stage,
+        heading: _state.heading,
+        done: _state.done,
+        total: _state.total,
+      ),
+    );
   }
 
   void resume() {
     _paused = false;
+    _pauseReason = null;
+    if (_loop != null) {
+      // Still inside an item (a model call can't be interrupted): it goes
+      // on, so show the work again instead of the pause.
+      _emit(
+        RunnerState(
+          working: true,
+          jobId: _state.jobId,
+          stage: _state.stage,
+          heading: _state.heading,
+          done: _state.done,
+          total: _state.total,
+          secondsLeft: _state.secondsLeft,
+        ),
+      );
+    }
     kick();
   }
 
@@ -101,11 +136,25 @@ class GenerationRunner {
 
   /// Starts the work loop unless it is already running.
   void kick() {
-    _loop ??= _run().whenComplete(() => _loop = null);
+    if (_loop != null) {
+      _kickAgain = true;
+      return;
+    }
+    _loop = _run().whenComplete(() {
+      _loop = null;
+      if (_kickAgain) {
+        _kickAgain = false;
+        if (!_paused) kick();
+      }
+    });
   }
 
-  /// Completes when the current loop has stopped (for tests).
-  Future<void> idle() => _loop ?? Future<void>.value();
+  /// Completes when no loop is running (for tests).
+  Future<void> idle() async {
+    while (_loop != null) {
+      await _loop;
+    }
+  }
 
   Future<void> _run() async {
     if (_paused) return;
@@ -133,10 +182,14 @@ class GenerationRunner {
       );
       final watch = Stopwatch()..start();
       try {
-        final heading = await _process(item, model);
-        _durations
-            .putIfAbsent(item.stage, () => [])
-            .add(watch.elapsedMilliseconds / 1000);
+        final (:heading, :usedModel) = await _process(item, model);
+        // Items with nothing left to do take no time; they would make the
+        // estimate far too low.
+        if (usedModel) {
+          _durations
+              .putIfAbsent(item.stage, () => [])
+              .add(watch.elapsedMilliseconds / 1000);
+        }
         await repo.setItemStatus(item.itemId, 'done');
         _emit(_copy(heading: heading));
       } on LlmCancelledException {
@@ -163,11 +216,15 @@ class GenerationRunner {
       await repo.finishCompletedJobs();
     }
     await repo.finishCompletedJobs();
-    _emit(RunnerState(paused: _paused));
+    _emit(RunnerState(paused: _paused, message: _paused ? _pauseReason : null));
   }
 
-  /// Runs one item; returns the heading it worked on, for the status line.
-  Future<String> _process(WorkItem item, JsonModel model) async {
+  /// Runs one item. Returns the heading it worked on, for the status line,
+  /// and whether it called the model.
+  Future<({String heading, bool usedModel})> _process(
+    WorkItem item,
+    JsonModel model,
+  ) async {
     final profile = item.profile;
     final generator = ChunkGenerator(
       model: _PausableModel(model, () => _paused),
@@ -181,9 +238,11 @@ class GenerationRunner {
       withContext: needsContext,
     );
 
+    var usedModel = false;
     if (item.stage == Stage.facts) {
       // Facts are shared by all qualities: extract them once per chunk.
       if (!await repo.hasFacts(chunk.id)) {
+        usedModel = true;
         final result = await generator.facts(passage);
         await repo.saveFacts(
           chunk: chunk,
@@ -195,6 +254,7 @@ class GenerationRunner {
     } else {
       final facts = await repo.factsNeedingQuestions(chunk.id, profile.quality);
       if (facts.isNotEmpty) {
+        usedModel = true;
         final result = await generator.questions(
           passage,
           facts,
@@ -209,19 +269,34 @@ class GenerationRunner {
         );
       }
     }
-    return chunk.headingPath;
+    return (heading: chunk.headingPath, usedModel: usedModel);
   }
 
   int? _secondsLeft(JobSummary? summary) {
     if (summary == null) return null;
-    var seconds = 0.0;
-    for (final entry in summary.remainingByStage.entries) {
-      final samples = _durations[entry.key];
+    double? average(String stage) {
+      final samples = _durations[stage];
       if (samples == null || samples.isEmpty) return null;
       final recent = samples.length > 5
           ? samples.sublist(samples.length - 5)
           : samples;
-      seconds += entry.value * recent.reduce((a, b) => a + b) / recent.length;
+      return recent.reduce((a, b) => a + b) / recent.length;
+    }
+
+    // Until a stage has run once, guess it from the facts stage: writing and
+    // blind-checking questions took about 1.6 times as long in the M2 eval.
+    final facts = average(Stage.facts);
+    var seconds = 0.0;
+    for (final entry in summary.remainingByStage.entries) {
+      final perItem =
+          average(entry.key) ??
+          (facts == null
+              ? null
+              : entry.key == Stage.questions
+              ? facts * 1.6
+              : facts);
+      if (perItem == null) return null;
+      seconds += entry.value * perItem;
     }
     return seconds.round();
   }

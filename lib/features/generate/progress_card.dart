@@ -31,15 +31,15 @@ class GenerationProgressCard extends ConsumerWidget {
         : 'Writing and checking multiple-choice questions';
 
     final String status;
-    if (runner?.message != null && !active) {
+    if (paused) {
+      status = runner?.message ?? 'Paused.';
+    } else if (runner?.message != null && !active) {
       status = runner!.message!;
-    } else if (paused) {
-      status = 'Paused.';
     } else if (active) {
       final left = runner.secondsLeft;
       status =
           '$stage · $done of $total steps'
-          '${left == null ? '' : ' · about ${formatDuration(Duration(seconds: left))} left'}';
+          '${left == null ? '' : ' · ${approxDuration(Duration(seconds: left))} left'}';
     } else {
       status = 'Waiting… $done of $total steps done.';
     }
@@ -71,15 +71,15 @@ class GenerationProgressCard extends ConsumerWidget {
             Wrap(
               spacing: 8,
               children: [
-                if (runner?.message != null && !active)
-                  FilledButton.tonal(
-                    onPressed: () => context.go('/settings/model'),
-                    child: const Text('Set up model'),
-                  )
-                else if (paused)
+                if (paused)
                   FilledButton.tonal(
                     onPressed: runnerNotifier.resume,
                     child: const Text('Resume'),
+                  )
+                else if (runner?.message != null && !active)
+                  FilledButton.tonal(
+                    onPressed: () => context.go('/settings/model'),
+                    child: const Text('Set up model'),
                   )
                 else
                   OutlinedButton(

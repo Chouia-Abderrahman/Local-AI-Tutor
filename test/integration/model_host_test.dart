@@ -1,7 +1,7 @@
-// Runs a real model on the development machine. Excluded from the normal
-// test run; start it with:
-//   flutter test --tags model test/integration/model_host_test.dart
-// Pick the file with TEST_MODEL=models/<file>.gguf (default: the 0.8B model).
+// Runs a real model on the development machine. Skipped unless TEST_MODEL
+// names a model file; start it with:
+//   TEST_MODEL=models/Qwen3.5-0.8B-Q4_K_M.gguf \
+//     flutter test --tags model test/integration/model_host_test.dart
 @Tags(['model'])
 library;
 
@@ -15,8 +15,9 @@ import 'package:pdf_study_assistant/core/llm/llm_engine.dart';
 import 'package:pdf_study_assistant/core/llm/model_checks.dart';
 
 void main() {
-  final modelPath =
-      Platform.environment['TEST_MODEL'] ?? 'models/Qwen3.5-0.8B-Q4_K_M.gguf';
+  // Runs only when TEST_MODEL names a model file, so a plain `flutter test`
+  // stays fast.
+  final modelPath = Platform.environment['TEST_MODEL'] ?? '';
   final available = File(modelPath).existsSync();
 
   test(
@@ -56,6 +57,10 @@ void main() {
       // Qwen3.5 is a hybrid (recurrent + attention) model, so llama.cpp
       // cannot reuse a cached prompt prefix; cachedPromptShare is 0 there.
     },
-    skip: available ? false : 'Model file not found: $modelPath',
+    skip: modelPath.isEmpty
+        ? 'Set TEST_MODEL=models/<file>.gguf to run the real model.'
+        : available
+        ? false
+        : 'Model file not found: $modelPath',
   );
 }

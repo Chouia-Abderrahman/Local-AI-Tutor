@@ -11,6 +11,7 @@ import '../../app/providers.dart';
 import '../../core/db/database.dart';
 import '../../core/db/library_repository.dart';
 import '../../core/ingest/importer.dart';
+import '../../core/ingest/ocr.dart';
 import '../../core/ingest/pdf_extractor.dart';
 
 final libraryRepositoryProvider = Provider<LibraryRepository>(
@@ -27,10 +28,26 @@ final documentOutlineProvider = FutureProvider.family<DocumentOutline, int>(
 
 final importerProvider = FutureProvider<DocumentImporter>((ref) async {
   final support = await getApplicationSupportDirectory();
+  final temp = await getTemporaryDirectory();
   return DocumentImporter(
     db: ref.watch(databaseProvider),
     storageDir: Directory(p.join(support.path, 'documents')),
-    extractPdf: PdfExtractor.extract,
+    extractPdf: (path, {required title, onProgress}) async {
+      // Text recognition for scanned pages (ML Kit runs on Android/iOS).
+      final ocr = Platform.isAndroid || Platform.isIOS
+          ? MlKitPageOcr(tempDir: temp)
+          : null;
+      try {
+        return await PdfExtractor.extract(
+          path,
+          title: title,
+          onProgress: onProgress,
+          ocr: ocr,
+        );
+      } finally {
+        await ocr?.close();
+      }
+    },
   );
 });
 

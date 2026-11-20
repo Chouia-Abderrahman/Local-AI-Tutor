@@ -159,26 +159,41 @@ class LlamadartEngine implements LlmEngine {
         );
 
         // Fast path: plain generation with the expected shape in the prompt,
-        // then schema validation. See json_text.dart for why.
-        final fast = await _engine
-            .create(
-              _toLlama(_withShapeHint(messages, schema)),
-              params: _toParams(params),
-              enableThinking: false,
-            )
-            .collect();
-        if (request.cancelled) throw LlmCancelledException();
-        final candidate = extractJsonObjectText(fast.text);
-        if (candidate != null) {
+        // then repair of near-misses and schema validation; tried twice
+        // before the slow grammar-constrained fallback (see json_text.dart).
+        for (var attempt = 0; attempt < 2; attempt++) {
+          final fast = await _engine
+              .create(
+                _toLlama(_withShapeHint(messages, schema)),
+                params: _toParams(
+                  attempt == 0
+                      ? params
+                      : LlmParams(
+                          maxTokens: params.maxTokens,
+                          temperature: params.temperature + 0.3,
+                          topP: params.topP,
+                          topK: params.topK,
+                          seed: params.seed == null ? null : params.seed! + 1,
+                        ),
+                ),
+                enableThinking: false,
+              )
+              .collect();
+          if (request.cancelled) throw LlmCancelledException();
+          final candidate = extractJsonObjectText(fast.text);
+          if (candidate == null) continue;
           try {
+            final repaired = jsonEncode(
+              coerceToSchema(jsonDecode(candidate), schema),
+            );
             return LlmJsonResult(
-              json: output.parse(candidate),
+              json: output.parse(repaired),
               raw: candidate,
               usage: _usage(fast.usage),
               perf: await _perf(),
             );
-          } on LlamaException {
-            // Invalid against the schema: fall through to the grammar.
+          } on Object {
+            // Invalid even after repair: try again, then the grammar.
           }
         }
 

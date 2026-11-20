@@ -1,5 +1,6 @@
 // Generates questions for the fixture textbook with a real model and writes
-// a report to build/eval/. Excluded from normal runs; start it with:
+// a report to build/eval/. Skipped unless TEST_MODEL names a model file;
+// start it with:
 //   TEST_MODEL=models/Qwen3.5-4B-Q4_K_M.gguf EVAL_QUALITY=standard \
 //     flutter test --tags model test/integration/eval_test.dart
 @Tags(['model'])
@@ -59,8 +60,9 @@ class _TimedModel implements JsonModel {
 }
 
 void main() {
-  final modelPath =
-      Platform.environment['TEST_MODEL'] ?? 'models/Qwen3.5-0.8B-Q4_K_M.gguf';
+  // Runs only when TEST_MODEL names a model file, so a plain `flutter test`
+  // stays fast.
+  final modelPath = Platform.environment['TEST_MODEL'] ?? '';
   final quality = Quality.values.byName(
     Platform.environment['EVAL_QUALITY'] ?? 'standard',
   );
@@ -182,7 +184,11 @@ void main() {
 
       expect(facts, isNotEmpty);
     },
-    skip: available ? false : 'Model file not found: $modelPath',
+    skip: modelPath.isEmpty
+        ? 'Set TEST_MODEL=models/<file>.gguf to run the real model.'
+        : available
+        ? false
+        : 'Model file not found: $modelPath',
     timeout: const Timeout(Duration(minutes: 90)),
   );
 }

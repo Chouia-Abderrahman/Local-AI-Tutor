@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pdf_study_assistant/core/db/database.dart';
 import 'package:pdf_study_assistant/core/generate/generation_repository.dart';
 import 'package:pdf_study_assistant/core/generate/json_model.dart';
+import 'package:pdf_study_assistant/core/generate/power_policy.dart';
 import 'package:pdf_study_assistant/core/generate/profile.dart';
 import 'package:pdf_study_assistant/core/generate/runner.dart';
 import 'package:pdf_study_assistant/core/ingest/importer.dart';
@@ -106,6 +107,29 @@ class _FakeTeacher implements JsonModel {
               .split(RegExp(r'\s+'))
             ..sort((a, b) => b.length.compareTo(a.length)))
           .first;
+}
+
+/// Reports item status changes, to act at exact points of the work loop.
+class _HookedRepository extends GenerationRepository {
+  _HookedRepository(super.db);
+
+  void Function(String status)? onStatus;
+
+  @override
+  Future<void> setItemStatus(
+    int itemId,
+    String status, {
+    String? error,
+    bool countAttempt = false,
+  }) async {
+    await super.setItemStatus(
+      itemId,
+      status,
+      error: error,
+      countAttempt: countAttempt,
+    );
+    onStatus?.call(status);
+  }
 }
 
 void main() {
@@ -271,4 +295,172 @@ void main() {
       expect(cached.hits, 1);
     },
   );
+
+  test('time left is estimated before the questions stage has run', () async {
+    final r = runner(teacher);
+    final states = <RunnerState>[];
+    final subscription = r.states.listen(states.add);
+    await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.standard),
+    );
+    await r.idle();
+    await subscription.cancel();
+    final working = states.where((s) => s.working).toList();
+    // Nothing to go on for the very first passage...
+    expect(working.first.stage, Stage.facts);
+    expect(working.first.secondsLeft, isNull);
+    // ...but the questions stage is guessed from the facts stage.
+    final firstQuestions = working.firstWhere(
+      (s) => s.stage == Stage.questions,
+    );
+    expect(firstQuestions.secondsLeft, isNotNull);
+  });
+
+  test('resuming before the paused call ends shows the work again', () async {
+    final r = runner(teacher);
+    final states = <RunnerState>[];
+    final subscription = r.states.listen(states.add);
+    var toggled = false;
+    teacher.onCall = (stage) {
+      if (stage == 'mcq' && !toggled) {
+        toggled = true;
+        r.pause(reason: 'Paused to save battery (15%).');
+        r.resume(); // Plugged in while the call still runs.
+      }
+    };
+    final jobId = await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.standard),
+    );
+    await r.idle();
+    await subscription.cancel();
+    expect((await repo.summary(jobId!))!.job.status, 'done');
+    // Nothing was cancelled.
+    expect(teacher.stages, ['facts', 'facts', 'mcq', 'blind', 'mcq', 'blind']);
+    final paused = states.indexWhere((s) => s.paused);
+    expect(states[paused + 1].working, isTrue);
+    expect(states[paused + 1].message, isNull);
+  });
+
+  test('a resume while the loop is stopping starts it again', () async {
+    final hooked = _HookedRepository(db);
+    final r = GenerationRunner(repo: hooked, prepareModel: () async => teacher);
+    var paused = false;
+    teacher.onCall = (stage) {
+      if (stage == 'mcq' && !paused) {
+        paused = true;
+        r.pause();
+      }
+    };
+    hooked.onStatus = (status) {
+      // The cancelled item went back to the queue: the loop is on its way
+      // out when the resume arrives.
+      if (status == 'queued' && paused) {
+        hooked.onStatus = null;
+        r.resume();
+      }
+    };
+    final jobId = await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.standard),
+    );
+    await r.idle();
+    expect((await hooked.summary(jobId!))!.job.status, 'done');
+  });
+
+  test('steps with nothing to do are left out of the estimate', () async {
+    final quick = runner(teacher);
+    await quick.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.quick),
+    );
+    await quick.idle();
+
+    // Standard reuses the facts, so its facts steps finish at once. A fresh
+    // runner has no timings, and those instant steps mustn't become one.
+    final r = runner(teacher);
+    final states = <RunnerState>[];
+    final subscription = r.states.listen(states.add);
+    await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.standard),
+    );
+    await r.idle();
+    await subscription.cancel();
+    final firstQuestions = states.firstWhere(
+      (s) => s.working && s.stage == Stage.questions,
+    );
+    expect(firstQuestions.secondsLeft, isNull);
+  });
+
+  group('battery', () {
+    late BatteryReading battery;
+    late GenerationRunner r;
+    late PowerPolicy policy;
+
+    setUp(() {
+      battery = (level: 15, charging: false);
+      r = runner(teacher);
+      policy = PowerPolicy(runner: r, readBattery: () async => battery);
+    });
+
+    tearDown(() => policy.dispose());
+
+    test('low battery pauses with a reason; plugging in resumes', () async {
+      policy.start(every: const Duration(hours: 1));
+      final jobId = await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.quick),
+      );
+      await r.idle();
+      expect(r.state.paused, isTrue);
+      expect(r.state.message, contains('battery (15%)'));
+      expect(await repo.hasQueuedWork(), isTrue);
+
+      battery = (level: 15, charging: true);
+      await policy.check();
+      await r.idle();
+      expect(r.state.paused, isFalse);
+      expect(r.state.message, isNull);
+      expect((await repo.summary(jobId!))!.job.status, 'done');
+    });
+
+    test('a hand resume stands; plugging in keeps a hand pause', () async {
+      Future<void>? checking;
+      teacher.onCall = (_) => checking = policy.check();
+      final jobId = await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.quick),
+      );
+      await r.idle();
+      await checking;
+      expect(r.state.message, contains('battery'));
+      expect((await repo.summary(jobId!))!.remaining, 1);
+
+      // The user resumes anyway: the next check leaves the work running.
+      r.resume();
+      await r.idle();
+      await checking;
+      expect((await repo.summary(jobId))!.job.status, 'done');
+
+      // A pause by hand isn't undone by plugging in.
+      teacher.onCall = null;
+      r.pause();
+      battery = (level: 15, charging: true);
+      await policy.check();
+      expect(r.state.paused, isTrue);
+    });
+
+    test('nothing happens when the phone is charging', () async {
+      battery = (level: 5, charging: true);
+      policy.start(every: const Duration(hours: 1));
+      final jobId = await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.quick),
+      );
+      await r.idle();
+      expect((await repo.summary(jobId!))!.job.status, 'done');
+    });
+  });
 }

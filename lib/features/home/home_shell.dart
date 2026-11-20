@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../generate/generate_controllers.dart';
+import '../generate/keep_alive.dart';
+import '../generate/power_policy.dart';
 
 /// Bottom navigation between the four main tabs.
 class HomeShell extends ConsumerWidget {
@@ -14,6 +16,10 @@ class HomeShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Resume generation an earlier run of the app left unfinished.
     ref.watch(generationBootstrapProvider);
+    // Keep generating when the app goes to the background (Android).
+    ref.watch(generationKeepAliveProvider);
+    // Pause generation on low battery when not plugged in (Android).
+    ref.watch(powerPolicyProvider);
     return Scaffold(
       body: shell,
       bottomNavigationBar: NavigationBar(

@@ -163,7 +163,8 @@ class _SectionTile extends StatelessWidget {
         : 'pp. ${section.pageStart}–${section.pageEnd}';
     final generated = counts == null || counts!.questions == 0
         ? ''
-        : ' · ${counts!.questions} questions';
+        : ' · ${counts!.questions} '
+              '${counts!.questions == 1 ? 'question' : 'questions'}';
     final detail = summary.isSkipped
         ? 'Skipped: ${summary.skippedKinds.map((k) => k.label).join(', ')}'
         : summary.studyChunks == 0
