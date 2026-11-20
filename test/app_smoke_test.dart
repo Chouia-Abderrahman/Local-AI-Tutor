@@ -24,14 +24,18 @@ void main() {
 
     expect(find.text('Library'), findsWidgets);
     expect(find.text('Set up the AI model'), findsOneWidget);
+    expect(find.text('No documents yet'), findsOneWidget);
+    expect(find.text('Import'), findsOneWidget);
 
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('AI model'), findsOneWidget);
     expect(find.text('Not set up'), findsOneWidget);
 
-    // Dispose the scope so drift closes cleanly before the test ends.
+    // Dispose the scope, let drift's stream cleanup timers fire, then close
+    // the database outside the fake clock.
     await tester.pumpWidget(const SizedBox());
-    await db.close();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.runAsync(db.close);
   });
 }

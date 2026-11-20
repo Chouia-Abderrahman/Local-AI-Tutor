@@ -47,7 +47,7 @@ class Chunks extends Table {
   IntColumn get pageEnd => integer()();
   IntColumn get tokenEstimate => integer()();
 
-  /// study | toc | index | refs | front | math
+  /// study | toc | bookIndex | refs | front | math (ContentKind.name)
   TextColumn get kind => text().withDefault(const Constant('study'))();
   TextColumn get sha256 => text()();
 }

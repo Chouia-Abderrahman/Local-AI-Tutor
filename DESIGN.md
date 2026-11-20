@@ -75,7 +75,7 @@ The pipeline is plain Dart behind interfaces (`LlmEngine`, `OcrEngine`, `SearchP
 ## 5. Import pipeline
 
 1. **Extract** with pdfrx: per-page text in reading order with character boxes, plus the outline. A character-to-(page, box) map is kept so any quote can be highlighted later.
-2. **Scanned pages**: a page with almost no text but an image is rendered at about 2x and sent to OCR.
+2. **Scanned pages**: a page with almost no text is flagged at import. Rendering it at about 2x and running OCR on it comes in M7.
 3. **Clean**: Unicode NFKC (ﬁ becomes fi), straight quotes, hyphenated line breaks joined (`exam-` + `ple` becomes `example`), paragraphs rebuilt from vertical gaps, running headers and footers removed (lines repeated at the same position on 40%+ of pages, with digits normalized so page numbers match).
 4. **Language**: detected per document. Prompts ask for output in that language and a check rejects output in another one.
 5. **Structure**: the section tree comes from the PDF outline. Without one, heading detection (taller glyphs, short line, numbering like `3.2`, body text after it). Without headings (plain text, slides), the model labels each chunk with a 2-5 word topic and consecutive chunks with the same label are merged.
@@ -297,13 +297,13 @@ models             id, name, path, kind (chat|embed), bytes, quant, bench_prompt
 | # | Milestone | Done when |
 |---|---|---|
 | M0 | Foundations and runtime spike | Git repo, unused platform folders removed, app shell, drift schema, `LlmEngine` with llamadart on an Android phone: the default model returns schema-valid JSON and streams, and the benchmark records tokens/s on the phone. Go/no-go decision on llamadart |
-| M1 | Import | PDF/TXT/MD become cleaned text, a section tree and chunks, with non-study pages skipped and OCR as a fallback. Library and outline screens |
+| M1 | Import | PDF/TXT/MD become cleaned text, a section tree and chunks, with non-study pages skipped and pages without text flagged. Library, outline and section screens |
 | M2 | Generation | Facts, cloze, flashcard and MCQ, all checks, profiles, resumable prioritized jobs, estimates, rejection log, eval tool |
 | M3 | Study | FSRS, sessions, the three card screens, feedback with the highlighted source page, report and upgrade |
 | M4 | Mastery map | Roll-up metrics, outline and treemap views, topic actions, per-section quality |
 | M5 | Chat | Retrieval, streamed answers with citations, not-found handling, modes, make-a-card |
 | M6 | Web | Providers, fetch/extract/cache, fact-check pipeline, conflict view, web in chat, activity log |
-| M7 | Polish | Power policy, Android foreground service, settings, CSV export (Anki later), presets tuned from eval results |
+| M7 | Polish | Text recognition for scanned pages (moved from M1), power policy, Android foreground service, settings, CSV export (Anki later), presets tuned from eval results |
 
 ## 16. Risks and open questions
 

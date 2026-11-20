@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 
 import '../features/common/placeholder_screen.dart';
 import '../features/home/home_shell.dart';
+import '../features/library/document_screen.dart';
 import '../features/library/library_screen.dart';
+import '../features/library/section_screen.dart';
 import '../features/model/model_lab_screen.dart';
 import '../features/settings/settings_screen.dart';
 
@@ -20,6 +22,24 @@ final routerProvider = Provider<GoRouter>((ref) {
               GoRoute(
                 path: '/library',
                 builder: (context, state) => const LibraryScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'doc/:id',
+                    builder: (context, state) => DocumentScreen(
+                      documentId: int.parse(state.pathParameters['id']!),
+                    ),
+                    routes: [
+                      GoRoute(
+                        path: 'section/:sectionId',
+                        builder: (context, state) => SectionScreen(
+                          sectionId: int.parse(
+                            state.pathParameters['sectionId']!,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ],
           ),
