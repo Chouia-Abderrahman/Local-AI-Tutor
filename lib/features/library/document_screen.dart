@@ -2,16 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/theme.dart';
+import '../../app/ui.dart';
 import '../../core/db/library_repository.dart';
 import '../../core/generate/generation_repository.dart';
+import '../chat/chat_controllers.dart';
 import '../generate/generate_controllers.dart';
 import '../generate/generate_sheet.dart';
 import '../generate/progress_card.dart';
 import '../mastery/mastery_view.dart';
+import '../model/model_controllers.dart';
+import '../model/model_picker.dart';
+import '../study/study_controllers.dart';
 import 'library_controllers.dart';
 
 /// A document's outline: its sections, which are studied and which skipped,
-/// and how many questions each has.
+/// and how many questions each has; and its mastery map.
 class DocumentScreen extends ConsumerWidget {
   const DocumentScreen({super.key, required this.documentId});
 
@@ -20,25 +26,60 @@ class DocumentScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final outline = ref.watch(documentOutlineProvider(documentId));
+    final doc = outline.value?.document;
+    final language =
+        doc == null || doc.language == null || doc.language == 'und'
+        ? ''
+        : ' · ${doc.language!.toUpperCase()}';
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(switch (outline) {
-            AsyncData(:final value) => value.document.title,
-            _ => 'Document',
-          }),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                doc?.title ?? 'Document',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (outline case AsyncData(:final value))
+                Text(
+                  '${plural(value.document.pageCount, 'page')} · '
+                  '${plural(value.sections.length, 'section')}$language',
+                  style: context.text.bodySmall,
+                ),
+            ],
+          ),
           actions: [
             IconButton(
-              tooltip: 'Delete document',
-              icon: const Icon(Icons.delete_outline),
-              onPressed: () => _confirmDelete(context, ref),
+              tooltip: 'Chat about this document',
+              icon: const Icon(Icons.chat_bubble_outline, size: 21),
+              onPressed: () {
+                ref.read(chatDocumentProvider.notifier).select(documentId);
+                context.go('/chat');
+              },
             ),
+            PopupMenuButton<String>(
+              tooltip: 'More',
+              icon: const Icon(Icons.more_vert, size: 21),
+              onSelected: (value) => switch (value) {
+                'model' => pickDocumentModel(context, ref, documentId),
+                _ => _confirmDelete(context, ref),
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'model', child: Text('AI model…')),
+                PopupMenuItem(value: 'delete', child: Text('Delete document')),
+              ],
+            ),
+            const SizedBox(width: 4),
           ],
           bottom: const TabBar(
+            isScrollable: true,
+            padding: EdgeInsets.symmetric(horizontal: 4),
             tabs: [
-              Tab(text: 'Outline'),
-              Tab(text: 'Mastery'),
+              Tab(text: 'Outline', height: 40),
+              Tab(text: 'Mastery', height: 40),
             ],
           ),
         ),
@@ -62,7 +103,8 @@ class DocumentScreen extends ConsumerWidget {
       builder: (context) => AlertDialog(
         title: const Text('Delete this document?'),
         content: const Text(
-          'Its questions and your study progress for it are deleted too.',
+          'Its questions, conversations and your study progress for it are '
+          'deleted too.',
         ),
         actions: [
           TextButton(
@@ -70,6 +112,10 @@ class DocumentScreen extends ConsumerWidget {
             child: const Text('Cancel'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: context.scheme.error,
+              foregroundColor: context.scheme.onError,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Delete'),
           ),
@@ -89,62 +135,136 @@ class _OutlineView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
     final doc = outline.document;
     final counts =
         ref.watch(sectionCountsProvider(doc.id)).value ??
         const <int, SectionCounts>{};
     final questions = counts.values.fold(0, (n, c) => n + c.questions);
     final skipped = outline.sections.where((s) => s.isSkipped).length;
+    final overview = ref.watch(studyOverviewProvider(doc.id)).value;
+    final model = ref.watch(documentModelProvider(doc.id));
+    final waiting = overview == null ? 0 : overview.due + overview.newAvailable;
+
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+      padding: const EdgeInsets.fromLTRB(Tokens.gutter, 12, Tokens.gutter, 32),
       children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${doc.pageCount} pages · ${outline.sections.length} sections'
-                  '${doc.language == null || doc.language == 'und' ? '' : ' · ${doc.language!.toUpperCase()}'}',
-                  style: theme.textTheme.titleSmall,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${outline.studyChunks} passages to study'
-                  '${skipped > 0 ? '; $skipped sections skipped (contents, references…)' : ''}.',
-                ),
-                if (questions > 0) Text('$questions questions so far.'),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: outline.studyChunks == 0
-                      ? null
-                      : () => showGenerateSheet(context, documentId: doc.id),
-                  icon: const Icon(Icons.auto_awesome),
-                  label: Text(
-                    questions == 0 ? 'Generate questions' : 'Generate more',
+        Panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              StatRow(
+                stats: [
+                  Stat(value: '${outline.studyChunks}', label: 'Passages'),
+                  Stat(value: '$questions', label: 'Questions'),
+                  Stat(
+                    value: '${overview?.due ?? 0}',
+                    label: 'Due',
+                    highlight: (overview?.due ?? 0) > 0,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(),
+              InkWell(
+                onTap: () => pickDocumentModel(context, ref, doc.id),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.memory,
+                        size: 18,
+                        color: context.colors.accent,
+                      ),
+                      const SizedBox(width: 8),
+                      Text('Model', style: context.text.bodySmall),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          model.name +
+                              (model.origin == ModelOrigin.appDefault &&
+                                      model.path != null
+                                  ? '  (default)'
+                                  : ''),
+                          style: context.text.labelLarge,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        'Change',
+                        style: context.text.labelMedium?.copyWith(
+                          color: context.scheme.secondary,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+              ),
+              const Divider(),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: outline.studyChunks == 0
+                          ? null
+                          : () =>
+                                showGenerateSheet(context, documentId: doc.id),
+                      icon: const Icon(Icons.auto_awesome, size: 18),
+                      label: Text(
+                        questions == 0 ? 'Generate' : 'Generate more',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: waiting == 0
+                          ? null
+                          : () => context.go('/study/session?doc=${doc.id}'),
+                      icon: const Icon(Icons.play_arrow, size: 20),
+                      label: Text(waiting == 0 ? 'Study' : 'Study $waiting'),
+                    ),
+                  ),
+                ],
+              ),
+              if (skipped > 0) ...[
+                const SizedBox(height: 10),
+                Text(
+                  '${plural(skipped, 'section')} skipped: contents, index, '
+                  'references and the like.',
+                  style: context.text.bodySmall,
+                ),
               ],
-            ),
+            ],
           ),
         ),
         GenerationProgressCard(documentId: doc.id),
-        const SizedBox(height: 8),
-        for (final summary in outline.sections)
-          _SectionTile(
-            documentId: doc.id,
-            summary: summary,
-            counts: counts[summary.section.id],
+        SectionLabel(
+          'Outline',
+          trailing: Text(
+            '${outline.sections.length}',
+            style: context.text.labelSmall,
           ),
+        ),
+        PanelList(
+          children: [
+            for (final summary in outline.sections)
+              _SectionRow(
+                documentId: doc.id,
+                summary: summary,
+                counts: counts[summary.section.id],
+              ),
+          ],
+        ),
       ],
     );
   }
 }
 
-class _SectionTile extends StatelessWidget {
-  const _SectionTile({
+class _SectionRow extends StatelessWidget {
+  const _SectionRow({
     required this.documentId,
     required this.summary,
     required this.counts,
@@ -156,40 +276,74 @@ class _SectionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final section = summary.section;
     final pages = section.pageStart == section.pageEnd
         ? 'p. ${section.pageStart}'
         : 'pp. ${section.pageStart}–${section.pageEnd}';
-    final generated = counts == null || counts!.questions == 0
-        ? ''
-        : ' · ${counts!.questions} '
-              '${counts!.questions == 1 ? 'question' : 'questions'}';
+    final questions = counts?.questions ?? 0;
     final detail = summary.isSkipped
-        ? 'Skipped: ${summary.skippedKinds.map((k) => k.label).join(', ')}'
+        ? '$pages · ${summary.skippedKinds.map((k) => k.label).join(', ')}'
         : summary.studyChunks == 0
         ? pages
-        : '$pages · ${summary.studyChunks} '
-              '${summary.studyChunks == 1 ? 'passage' : 'passages'}$generated';
+        : '$pages · ${plural(summary.studyChunks, 'passage')}'
+              '${questions == 0 ? '' : ' · ${plural(questions, 'question')}'}';
     final openable = summary.studyChunks + summary.skippedKinds.length > 0;
-    return Padding(
-      padding: EdgeInsets.only(left: (section.level - 1) * 16.0),
-      child: ListTile(
-        dense: section.level > 1,
-        title: Text(
-          section.title,
-          style: summary.isSkipped
-              ? TextStyle(color: theme.colorScheme.outline)
-              : section.level == 1
-              ? theme.textTheme.titleMedium
-              : null,
-        ),
-        subtitle: Text(detail),
-        trailing: summary.isSkipped
-            ? null
-            : IconButton(
+    final depth = (section.level - 1).clamp(0, 4);
+    return InkWell(
+      onTap: openable
+          ? () => context.go('/library/doc/$documentId/section/${section.id}')
+          : null,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12.0 + depth * 14, 9, 4, 9),
+        child: Row(
+          children: [
+            if (depth > 0) ...[
+              Container(width: 2, height: 30, color: context.colors.hairline),
+              const SizedBox(width: 10),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          section.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              (depth == 0
+                                      ? context.text.titleSmall
+                                      : context.text.bodyMedium?.copyWith(
+                                          fontWeight: FontWeight.w500,
+                                        ))
+                                  ?.copyWith(
+                                    color: summary.isSkipped
+                                        ? context.colors.muted
+                                        : null,
+                                  ),
+                        ),
+                      ),
+                      if (summary.isSkipped) ...[
+                        const SizedBox(width: 6),
+                        const Tag('Skipped'),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(detail, style: context.text.bodySmall),
+                ],
+              ),
+            ),
+            if (!summary.isSkipped && summary.studyChunks > 0)
+              IconButton(
                 tooltip: 'Generate for this section',
-                icon: const Icon(Icons.auto_awesome_outlined),
+                icon: Icon(
+                  Icons.auto_awesome_outlined,
+                  size: 19,
+                  color: context.colors.muted,
+                ),
                 onPressed: () => showGenerateSheet(
                   context,
                   documentId: documentId,
@@ -197,9 +351,8 @@ class _SectionTile extends StatelessWidget {
                   sectionTitle: section.title,
                 ),
               ),
-        onTap: openable
-            ? () => context.go('/library/doc/$documentId/section/${section.id}')
-            : null,
+          ],
+        ),
       ),
     );
   }

@@ -15,13 +15,16 @@ import 'package:pdf_study_assistant/core/llm/llm_engine.dart';
 /// Writes plausible output for any passage: facts from its first sentences,
 /// one question per fact, and correct blind answers.
 class _FakeTeacher implements JsonModel {
+  _FakeTeacher({this.name = 'fake-teacher'});
+
+  final String name;
   final List<String> stages = [];
   final Map<String, String> _answers = {};
   bool failFacts = false;
   void Function(String stage)? onCall;
 
   @override
-  String get modelName => 'fake-teacher';
+  String get modelName => name;
 
   @override
   Future<Map<String, Object?>> json({
@@ -166,7 +169,7 @@ void main() {
   });
 
   GenerationRunner runner(JsonModel model) =>
-      GenerationRunner(repo: repo, prepareModel: () async => model);
+      GenerationRunner(repo: repo, prepareModel: (_) async => model);
 
   test('Standard: facts for every passage first, then questions', () async {
     final r = runner(CachedJsonModel(teacher, db));
@@ -249,7 +252,7 @@ void main() {
   });
 
   test('no model: the runner waits with a message', () async {
-    final r = GenerationRunner(repo: repo, prepareModel: () async => null);
+    final r = GenerationRunner(repo: repo, prepareModel: (_) async => null);
     await r.start(
       documentId: documentId,
       profile: GenerationProfile.preset(Quality.quick),
@@ -295,6 +298,54 @@ void main() {
       expect(cached.hits, 1);
     },
   );
+
+  test('each document is generated with its own model', () async {
+    final energy = File('${storage.path}/energy.md')
+      ..writeAsStringSync(
+        '# Plants\n\nPhotosynthesis turns light energy into chemical energy '
+        'in plants. Chlorophyll absorbs mostly red and blue light.\n',
+      );
+    final second = (await DocumentImporter(
+      db: db,
+      storageDir: storage,
+      extractPdf: (path, {required title, onProgress}) =>
+          throw UnimplementedError(),
+    ).importFile(energy.path)).documentId;
+    final other = _FakeTeacher(name: 'other-model');
+    final asked = <int>{};
+    final r = GenerationRunner(
+      repo: repo,
+      prepareModel: (document) async {
+        asked.add(document);
+        return document == second ? other : teacher;
+      },
+    );
+    await r.start(
+      documentId: documentId,
+      profile: GenerationProfile.preset(Quality.quick),
+    );
+    await r.start(
+      documentId: second,
+      profile: GenerationProfile.preset(Quality.quick),
+    );
+    await r.idle();
+
+    expect(asked, {documentId, second});
+    final documentOfFact = {
+      for (final f in await db.select(db.facts).get()) f.id: f.documentId,
+    };
+    final questions = await db.select(db.questions).get();
+    expect(questions.map((q) => q.modelId).toSet(), {
+      'fake-teacher',
+      'other-model',
+    });
+    for (final q in questions) {
+      expect(
+        q.modelId,
+        documentOfFact[q.factId] == second ? 'other-model' : 'fake-teacher',
+      );
+    }
+  });
 
   test('time left is estimated before the questions stage has run', () async {
     final r = runner(teacher);
@@ -345,7 +396,10 @@ void main() {
 
   test('a resume while the loop is stopping starts it again', () async {
     final hooked = _HookedRepository(db);
-    final r = GenerationRunner(repo: hooked, prepareModel: () async => teacher);
+    final r = GenerationRunner(
+      repo: hooked,
+      prepareModel: (_) async => teacher,
+    );
     var paused = false;
     teacher.onCall = (stage) {
       if (stage == 'mcq' && !paused) {

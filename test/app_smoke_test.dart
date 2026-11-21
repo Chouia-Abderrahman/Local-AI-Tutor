@@ -22,14 +22,15 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('Local AI Tutor'), findsOneWidget);
     expect(find.text('Library'), findsWidgets);
-    expect(find.text('Set up the AI model'), findsOneWidget);
-    expect(find.text('No documents yet'), findsOneWidget);
-    expect(find.text('Import'), findsOneWidget);
+    expect(find.text('Set up the on-device model'), findsOneWidget);
+    expect(find.text('Your study shelf is empty'), findsOneWidget);
+    expect(find.text('Import a document'), findsOneWidget);
 
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
-    expect(find.text('AI model'), findsOneWidget);
+    expect(find.text('AI models'), findsOneWidget);
     expect(find.text('Not set up'), findsOneWidget);
 
     // Dispose the scope, let drift's stream cleanup timers fire, then close

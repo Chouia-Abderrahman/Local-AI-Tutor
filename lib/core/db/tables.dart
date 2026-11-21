@@ -17,6 +17,10 @@ class Documents extends Table {
   TextColumn get errorMessage => text().nullable()();
   TextColumn get settingsJson => text().nullable()();
   DateTimeColumn get importedAt => dateTime().withDefault(currentDateAndTime)();
+
+  /// The model file that generates for this document and answers its new
+  /// conversations. Null: the app's default model. (Schema 2.)
+  TextColumn get modelPath => text().nullable()();
 }
 
 @TableIndex(name: 'idx_sections_document', columns: {#documentId, #ord})
@@ -207,6 +211,10 @@ class ChatThreads extends Table {
   TextColumn get title => text()();
   TextColumn get summary => text().nullable()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  /// The model file that answers in this conversation. Null: the document's
+  /// model. (Schema 2.)
+  TextColumn get modelPath => text().nullable()();
 }
 
 @TableIndex(name: 'idx_chat_messages_thread', columns: {#threadId})

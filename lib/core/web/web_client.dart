@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 import '../db/database.dart';
 
 /// Sent with every request. Deliberately generic: no user details.
-const userAgent = 'PDFStudyAssistant/0.1 (on-device study app)';
+const userAgent = 'LocalAITutor/0.8 (on-device study app)';
 
 class WebPage {
   const WebPage({required this.url, required this.title, required this.text});

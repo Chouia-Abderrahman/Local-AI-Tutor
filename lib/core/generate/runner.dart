@@ -45,8 +45,9 @@ class GenerationRunner {
 
   final GenerationRepository repo;
 
-  /// Loads the model if needed; null when no model is available.
-  final Future<JsonModel?> Function() prepareModel;
+  /// Loads the model of [documentId] if needed (each document can have its
+  /// own); null when no model is available.
+  final Future<JsonModel?> Function(int documentId) prepareModel;
 
   final _states = StreamController<RunnerState>.broadcast();
   RunnerState _state = const RunnerState();
@@ -65,6 +66,10 @@ class GenerationRunner {
 
   Stream<RunnerState> get states => _states.stream;
   RunnerState get state => _state;
+
+  /// Whether the work loop runs, including while it loads a model before
+  /// its first item (when [RunnerState.working] is still false).
+  bool get isActive => _loop != null;
 
   /// Queues generation and starts working on it.
   Future<int?> start({
@@ -158,16 +163,19 @@ class GenerationRunner {
 
   Future<void> _run() async {
     if (_paused) return;
-    final model = await prepareModel();
-    if (model == null) {
-      _emit(
-        const RunnerState(message: 'Load an AI model to generate questions.'),
-      );
-      return;
-    }
     while (!_paused) {
       final item = await repo.nextItem();
       if (item == null) break;
+      // Per item: documents can use different models, so the model in
+      // memory may change between items.
+      final model = await prepareModel(item.documentId);
+      if (model == null) {
+        _emit(
+          const RunnerState(message: 'Load an AI model to generate questions.'),
+        );
+        return;
+      }
+      if (_paused) break;
       await repo.setItemStatus(item.itemId, 'running');
       final summary = await repo.summary(item.jobId);
       _emit(

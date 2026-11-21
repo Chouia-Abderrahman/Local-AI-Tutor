@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart' show immutable;
 
 import '../db/database.dart';
 import '../generate/checks.dart';
@@ -202,24 +203,99 @@ String _shorten(String text, int words) {
 }
 
 /// Chat threads and messages, one thread per document.
+/// A conversation, with what the conversation list shows about it.
+@immutable
+class ChatThreadInfo {
+  const ChatThreadInfo({
+    required this.thread,
+    required this.messageCount,
+    this.lastAt,
+  });
+
+  final ChatThread thread;
+  final int messageCount;
+  final DateTime? lastAt;
+}
+
 class ChatRepository {
   ChatRepository(this.db);
 
   final AppDatabase db;
 
-  Future<int> threadFor(int documentId) async {
-    final existing =
-        await (db.select(db.chatThreads)
-              ..where((t) => t.documentId.equals(documentId))
-              ..limit(1))
-            .getSingleOrNull();
-    if (existing != null) return existing.id;
-    return db
-        .into(db.chatThreads)
-        .insert(
-          ChatThreadsCompanion.insert(documentId: documentId, title: 'Chat'),
-        );
+  /// Title of a conversation until its first question names it.
+  static const newTitle = 'New conversation';
+
+  /// A conversation title from its first question.
+  static String titleFrom(String question) {
+    final text = question.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.length <= 48) return text;
+    final cut = text.substring(0, 48);
+    final space = cut.lastIndexOf(' ');
+    return '${space > 24 ? cut.substring(0, space) : cut}…';
   }
+
+  /// The document's conversations: an empty (new) one first, then the most
+  /// recently active.
+  Selectable<ChatThreadInfo> _threads(int documentId) => db
+      .customSelect(
+        'SELECT t.*, COUNT(m.id) AS message_count, '
+        'MAX(m.created_at) AS last_at, MAX(m.id) AS last_id '
+        'FROM chat_threads t '
+        'LEFT JOIN chat_messages m ON m.thread_id = t.id '
+        'WHERE t.document_id = ? '
+        'GROUP BY t.id '
+        'ORDER BY (COUNT(m.id) = 0) DESC, last_id DESC, t.id DESC',
+        variables: [Variable.withInt(documentId)],
+        readsFrom: {db.chatThreads, db.chatMessages},
+      )
+      .map(
+        (row) => ChatThreadInfo(
+          thread: db.chatThreads.map(row.data),
+          messageCount: row.read<int>('message_count'),
+          lastAt: row.readNullable<DateTime>('last_at'),
+        ),
+      );
+
+  Future<List<ChatThreadInfo>> threads(int documentId) =>
+      _threads(documentId).get();
+
+  Stream<List<ChatThreadInfo>> watchThreads(int documentId) =>
+      _threads(documentId).watch();
+
+  Future<ChatThread?> thread(int threadId) => (db.select(
+    db.chatThreads,
+  )..where((t) => t.id.equals(threadId))).getSingleOrNull();
+
+  /// The document's current conversation, created if there is none.
+  Future<int> threadFor(int documentId) async {
+    final threads = await this.threads(documentId);
+    if (threads.isNotEmpty) return threads.first.thread.id;
+    return _create(documentId);
+  }
+
+  /// A fresh conversation; an existing empty one is reused.
+  Future<int> newThread(int documentId) async {
+    final threads = await this.threads(documentId);
+    for (final info in threads) {
+      if (info.messageCount == 0) return info.thread.id;
+    }
+    return _create(documentId);
+  }
+
+  Future<int> _create(int documentId) => db
+      .into(db.chatThreads)
+      .insert(
+        ChatThreadsCompanion.insert(documentId: documentId, title: newTitle),
+      );
+
+  Future<void> rename(int threadId, String title) =>
+      (db.update(db.chatThreads)..where((t) => t.id.equals(threadId))).write(
+        ChatThreadsCompanion(title: Value(title)),
+      );
+
+  /// Deletes a conversation and its messages.
+  Future<void> deleteThread(int threadId) =>
+      (db.delete(db.chatThreads)..where((t) => t.id.equals(threadId))).go();
 
   Stream<List<ChatMessage>> watchMessages(int threadId) =>
       (db.select(db.chatMessages)

@@ -43,7 +43,7 @@ class AppDatabase extends _$AppDatabase {
   );
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -52,14 +52,11 @@ class AppDatabase extends _$AppDatabase {
       await _createSearchIndex();
     },
     onUpgrade: (m, from, to) async {
-      // No released version yet: rebuild instead of migrating.
-      await customStatement('PRAGMA foreign_keys = OFF');
-      await customStatement('DROP TABLE IF EXISTS chunks_fts');
-      for (final table in allTables.toList().reversed) {
-        await m.deleteTable(table.actualTableName);
+      if (from < 2) {
+        // A model per document and per conversation.
+        await m.addColumn(documents, documents.modelPath);
+        await m.addColumn(chatThreads, chatThreads.modelPath);
       }
-      await m.createAll();
-      await _createSearchIndex();
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');

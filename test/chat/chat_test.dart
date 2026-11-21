@@ -179,4 +179,42 @@ void main() {
     await repo.clear(thread);
     expect(await repo.messages(thread), isEmpty);
   });
+
+  test('a document has several conversations, newest activity first', () async {
+    final repo = ChatRepository(db);
+    final first = await repo.threadFor(documentId);
+    await repo.add(first, 'user', 'What is osmosis?');
+    // An empty conversation is reused rather than piling up.
+    final second = await repo.newThread(documentId);
+    expect(second, isNot(first));
+    expect(await repo.newThread(documentId), second);
+    expect(await repo.threadFor(documentId), second);
+
+    await repo.add(second, 'user', 'What is ATP?');
+    await repo.add(first, 'user', 'And diffusion?');
+    final threads = await repo.threads(documentId);
+    expect(threads.map((t) => t.thread.id), [first, second]);
+    expect(threads.first.messageCount, 2);
+    expect(threads.first.lastAt, isNotNull);
+
+    await repo.rename(second, ChatRepository.titleFrom('What is ATP?'));
+    expect((await repo.thread(second))!.title, 'What is ATP?');
+    await repo.deleteThread(second);
+    expect((await repo.threads(documentId)).single.thread.id, first);
+    expect(await repo.messages(second), isEmpty);
+  });
+
+  test('conversation titles come from the first question', () {
+    expect(
+      ChatRepository.titleFrom('  What is\nosmosis? '),
+      'What is osmosis?',
+    );
+    final long = ChatRepository.titleFrom(
+      'Why do animal cells burst in a hypotonic solution while plant cells '
+      'do not?',
+    );
+    expect(long.length, lessThanOrEqualTo(49));
+    expect(long, endsWith('…'));
+    expect(long, startsWith('Why do animal cells burst'));
+  });
 }

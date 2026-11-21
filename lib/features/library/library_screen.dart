@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path/path.dart' as p;
 
+import '../../app/theme.dart';
+import '../../app/ui.dart';
 import '../../core/db/database.dart';
 import '../model/model_setup_banner.dart';
+import '../study/study_controllers.dart';
 import 'library_controllers.dart';
 
 class LibraryScreen extends ConsumerWidget {
@@ -20,9 +24,10 @@ class LibraryScreen extends ConsumerWidget {
           SnackBar(
             content: Text(
               result.alreadyImported
-                  ? '${next.fileName} was already imported.'
-                  : 'Imported ${next.fileName}: ${result.sections} sections.'
-                        '${scanned > 0 ? ' $scanned pages had no text (scanned?).' : ''}',
+                  ? '${next.fileName} is already in your library.'
+                  : 'Imported ${next.fileName}: '
+                        '${plural(result.sections, 'section')}.'
+                        '${scanned > 0 ? ' ${plural(scanned, 'page')} had no text.' : ''}',
             ),
           ),
         );
@@ -38,25 +43,57 @@ class LibraryScreen extends ConsumerWidget {
 
     final importState = ref.watch(importControllerProvider);
     final documents = ref.watch(documentsProvider);
+    void import() =>
+        ref.read(importControllerProvider.notifier).pickAndImport();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Library')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: importState.busy
-            ? null
-            : () => ref.read(importControllerProvider.notifier).pickAndImport(),
-        icon: const Icon(Icons.add),
-        label: const Text('Import'),
+      appBar: AppBar(
+        title: const Wordmark(),
+        actions: const [ModelStatusButton(), SizedBox(width: 8)],
       ),
+      floatingActionButton: switch (documents) {
+        AsyncData(:final value) when value.isNotEmpty =>
+          FloatingActionButton.extended(
+            onPressed: importState.busy ? null : import,
+            icon: const Icon(Icons.add, size: 20),
+            label: const Text('Import'),
+          ),
+        _ => null,
+      },
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+        padding: const EdgeInsets.fromLTRB(Tokens.gutter, 4, Tokens.gutter, 96),
         children: [
           const ModelSetupBanner(),
-          if (importState.busy) _ImportProgressCard(state: importState),
+          if (importState.busy) _ImportProgress(state: importState),
           switch (documents) {
-            AsyncData(:final value) when value.isEmpty => const _EmptyLibrary(),
+            AsyncData(:final value) when value.isEmpty => EmptyState(
+              mark: true,
+              title: 'Your study shelf is empty',
+              body:
+                  'Import a PDF, a text file or Markdown notes. Questions, '
+                  'flashcards and answers are written on this phone; nothing '
+                  'is uploaded.',
+              action: FilledButton.icon(
+                onPressed: importState.busy ? null : import,
+                icon: const Icon(Icons.add, size: 20),
+                label: const Text('Import a document'),
+              ),
+            ),
             AsyncData(:final value) => Column(
-              children: [for (final doc in value) _DocumentTile(doc)],
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const _Today(),
+                SectionLabel(
+                  'Documents',
+                  trailing: Text(
+                    '${value.length}',
+                    style: context.text.labelSmall,
+                  ),
+                ),
+                PanelList(
+                  children: [for (final doc in value) _DocumentRow(doc)],
+                ),
+              ],
             ),
             AsyncError(:final error) => Text(
               'Could not load documents: $error',
@@ -72,27 +109,40 @@ class LibraryScreen extends ConsumerWidget {
   }
 }
 
-class _ImportProgressCard extends StatelessWidget {
-  const _ImportProgressCard({required this.state});
-
-  final ImportState state;
+/// What to study today, across all documents.
+class _Today extends ConsumerWidget {
+  const _Today();
 
   @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final overview = ref.watch(studyOverviewProvider(null)).value;
+    if (overview == null) return const SizedBox.shrink();
+    final waiting = overview.due + overview.newAvailable;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Panel(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Importing ${state.fileName}',
-              style: Theme.of(context).textTheme.titleSmall,
+            StatRow(
+              stats: [
+                Stat(
+                  value: '${overview.due}',
+                  label: 'Due',
+                  highlight: overview.due > 0,
+                ),
+                Stat(value: '${overview.newAvailable}', label: 'New'),
+                Stat(value: '${overview.reviewedToday}', label: 'Done today'),
+              ],
             ),
-            const SizedBox(height: 8),
-            LinearProgressIndicator(value: state.fraction),
-            const SizedBox(height: 4),
-            Text(state.stage ?? ''),
+            if (waiting > 0) ...[
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => context.go('/study/session'),
+                icon: const Icon(Icons.play_arrow, size: 20),
+                label: Text('Study ${plural(waiting, 'card')}'),
+              ),
+            ],
           ],
         ),
       ),
@@ -100,62 +150,83 @@ class _ImportProgressCard extends StatelessWidget {
   }
 }
 
-class _DocumentTile extends StatelessWidget {
-  const _DocumentTile(this.doc);
+class _ImportProgress extends StatelessWidget {
+  const _ImportProgress({required this.state});
+
+  final ImportState state;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const SizedBox.square(
+                dimension: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Importing ${state.fileName}',
+                  style: context.text.titleSmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ThinBar(value: state.fraction ?? 0),
+          const SizedBox(height: 6),
+          Text(state.stage ?? '', style: context.text.bodySmall),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DocumentRow extends ConsumerWidget {
+  const _DocumentRow(this.doc);
 
   final StudyDocument doc;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final overview = doc.status == 'ready'
+        ? ref.watch(studyOverviewProvider(doc.id)).value
+        : null;
+    final extension = doc.sourcePath == null
+        ? 'PDF'
+        : p.extension(doc.sourcePath!).replaceFirst('.', '').toUpperCase();
+    final failed = doc.status == 'failed';
+    final language = doc.language == null || doc.language == 'und'
+        ? ''
+        : ' · ${doc.language!.toUpperCase()}';
     final subtitle = switch (doc.status) {
-      'ready' =>
-        '${doc.pageCount} ${doc.pageCount == 1 ? 'page' : 'pages'}'
-            '${doc.language == null || doc.language == 'und' ? '' : ' · ${doc.language!.toUpperCase()}'}',
+      'ready' => '${plural(doc.pageCount, 'page')}$language',
       'failed' => 'Import failed: ${doc.errorMessage ?? 'unknown error'}',
       _ => 'Importing…',
     };
-    return Card(
-      child: ListTile(
-        leading: Icon(
-          doc.status == 'failed'
-              ? Icons.error_outline
-              : Icons.description_outlined,
-          color: doc.status == 'failed' ? theme.colorScheme.error : null,
-        ),
-        title: Text(doc.title),
-        subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => context.go('/library/doc/${doc.id}'),
+    final due = overview?.due ?? 0;
+    return PanelRow(
+      leading: FileGlyph(
+        label: extension.isEmpty ? 'DOC' : extension,
+        failed: failed,
       ),
-    );
-  }
-}
-
-class _EmptyLibrary extends StatelessWidget {
-  const _EmptyLibrary();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(top: 48),
-      child: Column(
+      title: Text(doc.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.picture_as_pdf_outlined,
-            size: 64,
-            color: theme.colorScheme.outline,
-          ),
-          const SizedBox(height: 16),
-          Text('No documents yet', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 4),
-          const Text(
-            'Import a PDF, a text file or Markdown notes.',
-            textAlign: TextAlign.center,
-          ),
+          if (due > 0) Tag('$due due', tone: TagTone.accent),
+          Icon(Icons.chevron_right, size: 20, color: context.colors.muted),
         ],
       ),
+      onTap: () => context.go('/library/doc/${doc.id}'),
     );
   }
 }

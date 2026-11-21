@@ -1,10 +1,10 @@
-# PDF Study Assistant
+# Local AI Tutor
 
 An Android app that turns a PDF or a text file into study material with a language model that runs on the phone. It finds the facts in each section, checks each one against a quote from the source, and writes cloze cards, flashcards and multiple-choice questions from them. You study with spaced repetition (FSRS), and a mastery map shows which sections you know. A chat answers questions about the document with citations. If you turn web access on, cards and answers can be checked against Wikipedia or a search server you run.
 
 Nothing leaves the phone unless you turn web access on. Otherwise the network is only used to download a model.
 
-[DESIGN.md](DESIGN.md) has the design, the reasons behind it and the measurements.
+[DESIGN.md](DESIGN.md) has the design, the reasons behind it and the measurements. The repository and the Dart package keep the app's working name, `pdf_study_assistant`.
 
 ## Features
 
@@ -16,15 +16,17 @@ Nothing leaves the phone unless you turn web access on. Otherwise the network is
   - Deep: three candidates per fact and a second blind check.
 
   A fact is kept only if its quote is found in the source. Questions also go through code checks: the answer has to come from the quote, a distractor may not be true according to the source, the right answer may not stand out by its length, and repeats are dropped. Depth goes from Recall and Understand to Apply (Standard and up) and Analyze (Thorough and up).
-- **Background work.** Generation runs in a foreground service with a progress notification, picks up where it stopped after the app restarts, and pauses at 20% battery when the phone isn't charging. You can study the sections that are ready while the rest is generated.
+- **Background work.** Long work keeps going when you leave the app: model downloads, model loading, answers, fact checks and question generation run in a foreground service whose notification says what is happening. Generation picks up where it stopped after the app restarts and pauses at 20% battery when the phone isn't charging. You can study the sections that are ready while the rest is generated.
 - **Study.** Flashcards, typed cloze answers and multiple choice. FSRS schedules each fact. You can report a bad card.
 - **Mastery.** Predicted recall a week from now for each section, as a list and as a treemap.
-- **Chat.** Answers are built from the document's passages (full-text search) and cite them as [1], [2]. An answer that the passages don't support is marked as not covered by the document and can't be saved as a card.
+- **Chat.** Each document has as many conversations as you like, titled from their first question. Answers are built from the document's passages (full-text search) and cite them as [1], [2]. An answer that the passages don't support is marked as not covered by the document and can't be saved as a card.
+- **A model per document and conversation.** Settings → AI models sets the app default. A document can use its own model for its questions and conversations, and a conversation can pick its own from the model chip in its header. One model is in memory at a time, so switching takes a few seconds.
+- **Look.** A compact layout with nearly square corners, ink and paper colors with one amber accent, light and dark themes, and Source Sans 3.
 - **Web (off by default).** Searches Wikipedia, or a SearXNG server you set up. A verdict is given only when a quote from the page supports it. When the page conflicts with the document, the app shows the conflict and leaves your cards as they are. You allow web access per document, and Settings → Web access lists every query sent.
 
 ## Models
 
-The app runs GGUF models with llama.cpp through [llamadart](https://pub.dev/packages/llamadart). Settings → AI model recommends one of these from the phone's RAM and downloads it from Hugging Face:
+The app runs GGUF models with llama.cpp through [llamadart](https://pub.dev/packages/llamadart). Settings → AI models recommends one of these from the phone's RAM and downloads it from Hugging Face:
 
 | Model | Download | Recommended when the phone reports |
 |---|---|---|
@@ -32,9 +34,9 @@ The app runs GGUF models with llama.cpp through [llamadart](https://pub.dev/pack
 | Qwen3.5-2B Q4_K_M | 1.3 GB | 4.5 GiB or more |
 | Qwen3.5-0.8B Q4_K_M | 533 MB | less than 4.5 GiB |
 
-The files are unsloth's GGUF conversions of Qwen3.5 (Apache-2.0). The same screen has a speed test, which the time estimates are based on.
+The files are unsloth's GGUF conversions of Qwen3.5 (Apache-2.0). Downloads keep going if you leave the app. The same screen makes a model the default and runs a speed test on any model; time estimates use the speed test of the model a document uses.
 
-To put a model on a debug build without downloading it on the phone, copy it into the app's `sideload` folder; the AI model screen lists it next to the downloads:
+To put a model on a debug build without downloading it on the phone, copy it into the app's `sideload` folder; the AI models screen lists it, tagged "Copied in", next to the downloads:
 
 ```bash
 adb push Qwen3.5-0.8B-Q4_K_M.gguf /data/local/tmp/
@@ -98,12 +100,15 @@ A model writes much the same questions on a laptop as on a phone, so quality can
 | `lib/core/study` | Scheduling, study sessions, mastery and the treemap layout |
 | `lib/core/chat`, `lib/core/web` | Passage search, chat, web search and fact checks |
 | `lib/core/db` | drift (SQLite) tables and queries |
-| `lib/features` | Screens, one folder per feature |
+| `lib/app` | Theme, shared widgets, router |
+| `lib/features` | Screens, one folder per feature; `background` keeps long work running |
 | `test/integration` | Real-model tests |
+| `tool/branding` | Builds the launcher icons, splash and notification icon |
 
 ## Known limits
 
 - Speed and battery use have only been measured on a laptop and an emulator, not on a real phone.
 - Qwen3.5 models mix attention and state-space layers, so llama.cpp can't reuse a prompt prefix from one call to the next. The app batches each passage's work into as few calls as it can instead.
+- Only one model is in memory at a time, so going back and forth between conversations that use different models reloads the model each time.
 - Text recognition reads Latin script only.
 - Not built yet: export to CSV or Anki, a quiz mode in the chat, and search providers other than Wikipedia and SearXNG.

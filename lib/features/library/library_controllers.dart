@@ -13,6 +13,7 @@ import '../../core/db/library_repository.dart';
 import '../../core/ingest/importer.dart';
 import '../../core/ingest/ocr.dart';
 import '../../core/ingest/pdf_extractor.dart';
+import '../model/model_controllers.dart';
 
 final libraryRepositoryProvider = Provider<LibraryRepository>(
   (ref) => LibraryRepository(ref.watch(databaseProvider)),
@@ -25,6 +26,19 @@ final documentsProvider = StreamProvider<List<StudyDocument>>(
 final documentOutlineProvider = FutureProvider.family<DocumentOutline, int>(
   (ref, documentId) => ref.watch(libraryRepositoryProvider).outline(documentId),
 );
+
+/// The model a document uses: its own choice, or the app default.
+final documentModelProvider = Provider.family<ResolvedModel, int>((
+  ref,
+  documentId,
+) {
+  final documents = ref.watch(documentsProvider).value ?? const [];
+  final document = documents.where((d) => d.id == documentId).firstOrNull;
+  return resolveModel(
+    document: document?.modelPath,
+    appDefault: ref.watch(activeModelProvider.select((s) => s.path)),
+  );
+});
 
 final importerProvider = FutureProvider<DocumentImporter>((ref) async {
   final support = await getApplicationSupportDirectory();

@@ -7,10 +7,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
 import '../../core/db/database.dart';
 import '../../core/generate/json_model.dart';
+import '../../core/llm/llm_engine.dart';
 import '../../core/web/fact_checker.dart';
 import '../../core/web/search.dart';
 import '../../core/web/web_client.dart';
-import '../model/model_controllers.dart';
 
 const _enabledKey = 'web_enabled';
 const _searxKey = 'web_searx_url';
@@ -149,14 +149,12 @@ Future<bool> ensureWebAllowed(
 }
 
 /// A fact checker using the loaded model, or null when none is loaded.
-Future<FactChecker?> buildFactChecker(WidgetRef ref) async {
-  if (!await ref.read(activeModelProvider.notifier).ensureLoaded()) {
-    return null;
-  }
+/// A fact checker on [engine], which [ModelUse] has loaded.
+Future<FactChecker> buildFactChecker(WidgetRef ref, LlmEngine engine) async {
   final db = ref.read(databaseProvider);
   return FactChecker(
     db: db,
-    model: CachedJsonModel(EngineJsonModel(ref.read(llmEngineProvider)), db),
+    model: CachedJsonModel(EngineJsonModel(engine), db),
     providers: await ref.read(searchProvidersProvider.future),
     web: ref.read(webClientProvider),
   );

@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fsrs/fsrs.dart' as fsrs;
 import 'package:go_router/go_router.dart';
 
+import '../../app/theme.dart';
+import '../../app/ui.dart';
 import '../../core/generate/cloze.dart';
 import '../../core/study/study_repository.dart';
 import '../web/fact_check_sheet.dart';
@@ -48,20 +50,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       _typed.clear();
     });
     final total = state.queue.length;
+    final asking =
+        state.phase == SessionPhase.asking ||
+        state.phase == SessionPhase.answered;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          state.phase == SessionPhase.asking ||
-                  state.phase == SessionPhase.answered
-              ? '${state.index + 1} of $total'
-              : 'Study',
+        leading: IconButton(
+          tooltip: 'End session',
+          icon: const Icon(Icons.close),
+          onPressed: () => context.go('/study'),
         ),
+        titleSpacing: 0,
+        title: Text(asking ? '${state.index + 1} of $total' : 'Study'),
         actions: [
           if (state.current != null)
             PopupMenuButton<String>(
               tooltip: 'Report a problem',
-              icon: const Icon(Icons.flag_outlined),
+              icon: const Icon(Icons.flag_outlined, size: 21),
               onSelected: (value) =>
                   controller.report(factIsWrong: value == 'fact'),
               itemBuilder: (_) => const [
@@ -75,14 +81,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 ),
               ],
             ),
+          const SizedBox(width: 4),
         ],
         bottom: total == 0
             ? null
             : PreferredSize(
-                preferredSize: const Size.fromHeight(4),
-                child: LinearProgressIndicator(
-                  value: (state.index / total).clamp(0, 1),
-                ),
+                preferredSize: const Size.fromHeight(2),
+                child: ThinBar(value: state.index / total, height: 2),
               ),
       ),
       body: SafeArea(
@@ -90,9 +95,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           SessionPhase.loading => const Center(
             child: CircularProgressIndicator(),
           ),
-          SessionPhase.empty => const _Message(
-            icon: Icons.check_circle_outline,
-            text: 'Nothing to study right now.',
+          SessionPhase.empty => EmptyState(
+            icon: Icons.check,
+            title: 'Nothing to study right now',
+            body: 'Reviews come back when they are due.',
+            action: OutlinedButton(
+              onPressed: () => context.go('/study'),
+              child: const Text('Back to Study'),
+            ),
           ),
           SessionPhase.finished => _Finished(state: state),
           _ => _QuestionView(state: state, typed: _typed),
@@ -112,49 +122,77 @@ class _QuestionView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final item = state.current!;
     final controller = ref.read(sessionControllerProvider.notifier);
-    final theme = Theme.of(context);
     final answered = state.phase == SessionPhase.answered;
     final type = item.question.type;
+    final kind = switch (type) {
+      'mcq' => 'Multiple choice',
+      'cloze' => 'Fill in the blank',
+      _ => 'Flashcard',
+    };
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(Tokens.gutter, 16, Tokens.gutter, 24),
       children: [
-        Text(
-          [
-            if (item.headingPath != null) item.headingPath!,
-            if (item.isNew) 'New',
-          ].join(' · '),
-          style: theme.textTheme.labelMedium?.copyWith(
-            color: theme.colorScheme.outline,
-          ),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(kind.toUpperCase(), style: context.text.labelSmall),
+            if (item.isNew) const Tag('New', tone: TagTone.accent),
+            if (item.headingPath != null)
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width * 0.6,
+                ),
+                child: Text(
+                  '· ${item.headingPath!}',
+                  style: context.text.bodySmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Text(
           type == 'cloze'
               ? item.question.prompt.replaceAll(clozeBlank, '______')
               : item.question.prompt,
-          style: theme.textTheme.titleLarge,
+          style: context.text.titleLarge?.copyWith(fontSize: 20, height: 1.35),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
         if (type == 'mcq') ...[
           for (final (i, option) in state.options.indexed)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: _OptionButton(
+              child: _Option(
+                letter: String.fromCharCode(65 + i),
                 text: option,
                 isCorrect: answered && i == state.correctOption,
                 isWrongChoice:
                     answered && i == state.chosen && i != state.correctOption,
+                dimmed:
+                    answered && i != state.correctOption && i != state.chosen,
                 onPressed: answered ? null : () => controller.choose(i),
               ),
             ),
           if (!answered)
-            CheckboxListTile(
-              value: state.unsure,
-              onChanged: (_) => controller.toggleUnsure(),
-              title: const Text("I'm not sure"),
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
+            InkWell(
+              borderRadius: BorderRadius.circular(Tokens.radius),
+              onTap: controller.toggleUnsure,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Checkbox(
+                      value: state.unsure,
+                      onChanged: (_) => controller.toggleUnsure(),
+                    ),
+                    Text("I'm not sure", style: context.text.bodyMedium),
+                  ],
+                ),
+              ),
             ),
         ] else if (type == 'cloze' && !answered) ...[
           TextField(
@@ -163,7 +201,6 @@ class _QuestionView extends ConsumerWidget {
             textInputAction: TextInputAction.done,
             decoration: const InputDecoration(
               labelText: 'Missing word or phrase',
-              border: OutlineInputBorder(),
             ),
             onChanged: controller.setTyped,
             onSubmitted: (_) => controller.checkTyped(),
@@ -189,9 +226,9 @@ class _QuestionView extends ConsumerWidget {
           ),
         if (answered) ...[
           if (type != 'mcq') _AnswerLine(item: item, state: state),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           _Feedback(item: item),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
           if (!state.rated)
             _RatingButtons(onRate: controller.rate)
           else
@@ -205,41 +242,83 @@ class _QuestionView extends ConsumerWidget {
   }
 }
 
-class _OptionButton extends StatelessWidget {
-  const _OptionButton({
+class _Option extends StatelessWidget {
+  const _Option({
+    required this.letter,
     required this.text,
     required this.isCorrect,
     required this.isWrongChoice,
+    required this.dimmed,
     required this.onPressed,
   });
 
+  final String letter;
   final String text;
   final bool isCorrect;
   final bool isWrongChoice;
+  final bool dimmed;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final color = isCorrect
-        ? scheme.primary
+    final colors = context.colors;
+    final scheme = context.scheme;
+    final accent = isCorrect
+        ? colors.success
         : isWrongChoice
-        ? scheme.error
+        ? colors.danger
         : null;
-    return OutlinedButton(
-      onPressed: onPressed ?? () {},
-      style: OutlinedButton.styleFrom(
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.all(16),
-        side: color == null ? null : BorderSide(color: color, width: 2),
-        foregroundColor: color,
+    final background = accent == null
+        ? scheme.surfaceContainerLowest
+        : Color.alphaBlend(
+            accent.withValues(alpha: 0.10),
+            scheme.surfaceContainerLowest,
+          );
+    return Material(
+      color: background,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Tokens.radius),
+        side: BorderSide(
+          color: accent ?? scheme.outline,
+          width: accent == null ? 1 : 1.5,
+        ),
       ),
-      child: Row(
-        children: [
-          Expanded(child: Text(text)),
-          if (isCorrect) Icon(Icons.check, color: color),
-          if (isWrongChoice) Icon(Icons.close, color: color),
-        ],
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 11, 12, 11),
+          child: Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: accent ?? scheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(Tokens.radiusSmall),
+                ),
+                child: Text(
+                  letter,
+                  style: context.text.labelMedium?.copyWith(
+                    color: accent == null ? colors.muted : scheme.surface,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  text,
+                  style: context.text.bodyLarge?.copyWith(
+                    color: dimmed ? colors.muted : null,
+                  ),
+                ),
+              ),
+              if (isCorrect) Icon(Icons.check, size: 20, color: accent),
+              if (isWrongChoice) Icon(Icons.close, size: 20, color: accent),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -253,7 +332,6 @@ class _AnswerLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final verdict = switch (state.typedCorrect) {
       true => 'Correct: ',
       false => 'Answer: ',
@@ -261,10 +339,10 @@ class _AnswerLine extends StatelessWidget {
     };
     return Text(
       '$verdict${item.question.answer}',
-      style: theme.textTheme.titleMedium?.copyWith(
+      style: context.text.titleMedium?.copyWith(
         color: state.typedCorrect == false
-            ? theme.colorScheme.error
-            : theme.colorScheme.primary,
+            ? context.colors.danger
+            : context.colors.success,
       ),
     );
   }
@@ -277,44 +355,61 @@ class _Feedback extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
     final (why, whyWrong) = item.explanation;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
+    return Panel(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: Text(
               item.pageStart == null
                   ? 'From the text'
                   : 'From the text, page ${item.pageStart}',
-              style: theme.textTheme.labelMedium,
+              style: context.text.labelSmall,
             ),
-            const SizedBox(height: 4),
-            Text(
+          ),
+          Container(
+            margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.only(left: 10),
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(color: context.colors.accent, width: 2),
+              ),
+            ),
+            child: Text(
               '“${item.fact.quote}”',
-              style: theme.textTheme.bodyMedium?.copyWith(
+              style: context.text.bodyMedium?.copyWith(
                 fontStyle: FontStyle.italic,
               ),
             ),
-            if (why != null && why.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(why),
-            ],
-            for (final (i, note) in whyWrong.indexed)
-              if (i < item.distractors.length)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    '✗ ${item.distractors[i]}: $note',
-                    style: theme.textTheme.bodySmall,
-                  ),
+          ),
+          if (why != null && why.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: Text(why, style: context.text.bodyMedium),
+            ),
+          for (final (i, note) in whyWrong.indexed)
+            if (i < item.distractors.length)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                child: Text(
+                  '✗ ${item.distractors[i]}: $note',
+                  style: context.text.bodySmall,
                 ),
-            Align(
-              alignment: Alignment.centerRight,
+              ),
+          const SizedBox(height: 6),
+          const Divider(),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               child: TextButton.icon(
-                icon: const Icon(Icons.travel_explore, size: 18),
+                style: TextButton.styleFrom(
+                  foregroundColor: context.colors.muted,
+                ),
+                icon: const Icon(Icons.travel_explore, size: 17),
                 label: const Text('Check on the web'),
                 onPressed: () => showFactCheck(
                   context,
@@ -324,8 +419,8 @@ class _Feedback extends ConsumerWidget {
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -341,30 +436,34 @@ class _RatingButtons extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text('How well did you know it?'),
+        Text('HOW WELL DID YOU KNOW IT?', style: context.text.labelSmall),
         const SizedBox(height: 8),
         Row(
           children: [
-            for (final (rating, label) in [
+            for (final (i, (rating, label)) in [
               (fsrs.Rating.again, 'Again'),
               (fsrs.Rating.hard, 'Hard'),
               (fsrs.Rating.good, 'Good'),
               (fsrs.Rating.easy, 'Easy'),
-            ])
+            ].indexed) ...[
+              if (i > 0) const SizedBox(width: 6),
               Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: rating == fsrs.Rating.good
-                      ? FilledButton(
-                          onPressed: () => onRate(rating),
-                          child: Text(label),
-                        )
-                      : OutlinedButton(
-                          onPressed: () => onRate(rating),
-                          child: Text(label),
-                        ),
-                ),
+                child: rating == fsrs.Rating.good
+                    ? FilledButton(
+                        onPressed: () => onRate(rating),
+                        child: Text(label),
+                      )
+                    : OutlinedButton(
+                        style: rating == fsrs.Rating.again
+                            ? OutlinedButton.styleFrom(
+                                foregroundColor: context.colors.danger,
+                              )
+                            : null,
+                        onPressed: () => onRate(rating),
+                        child: Text(label),
+                      ),
               ),
+            ],
           ],
         ),
       ],
@@ -383,23 +482,32 @@ class _Finished extends StatelessWidget {
         ? 0
         : (state.correct * 100 / state.reviewed).round();
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.emoji_events_outlined,
-              size: 64,
-              color: Theme.of(context).colorScheme.primary,
-            ),
+            const AppMark(size: 44, badge: true),
             const SizedBox(height: 16),
+            Text('Session done', style: context.text.headlineSmall),
+            const SizedBox(height: 6),
             Text(
-              'Session done',
-              style: Theme.of(context).textTheme.headlineSmall,
+              '${state.reviewed} answers · $percent% right',
+              style: context.text.bodyMedium?.copyWith(
+                color: context.colors.muted,
+              ),
             ),
-            const SizedBox(height: 8),
-            Text('${state.reviewed} answers · $percent% right'),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: 220,
+              child: ThinBar(
+                value: percent / 100,
+                height: 4,
+                color: percent >= 80
+                    ? context.colors.success
+                    : context.colors.accent,
+              ),
+            ),
             const SizedBox(height: 24),
             FilledButton(
               onPressed: () => context.go('/study'),
@@ -410,23 +518,4 @@ class _Finished extends StatelessWidget {
       ),
     );
   }
-}
-
-class _Message extends StatelessWidget {
-  const _Message({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 64, color: Theme.of(context).colorScheme.outline),
-        const SizedBox(height: 16),
-        Text(text),
-      ],
-    ),
-  );
 }

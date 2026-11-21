@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
+import '../../app/theme.dart';
+import '../../app/ui.dart';
 import 'web_controllers.dart';
 
 /// Web access on/off, the optional search server, and every query sent.
@@ -15,68 +17,87 @@ class WebSettingsScreen extends ConsumerWidget {
     final settings =
         ref.watch(webSettingsProvider).value ?? const WebSettings();
     final log = ref.watch(webLogProvider).value ?? const [];
-    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Web access')),
       body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.fromLTRB(Tokens.gutter, 4, Tokens.gutter, 32),
         children: [
-          SwitchListTile(
-            title: const Text('Allow web lookups'),
-            subtitle: const Text(
-              'Used only when you tap "Check on the web" or "Search the web". '
-              'Each document asks before its first lookup.',
-            ),
-            value: settings.enabled,
-            onChanged: (on) =>
-                ref.read(webSettingsProvider.notifier).setEnabled(on),
+          PanelList(
+            children: [
+              PanelRow(
+                leading: const Icon(Icons.public),
+                title: const Text('Allow web lookups'),
+                subtitle: const Text(
+                  'Only when you tap "Check on the web" or "Search the web". '
+                  'Each document asks before its first lookup.',
+                ),
+                trailing: SharpSwitch(
+                  value: settings.enabled,
+                  onChanged: (on) =>
+                      ref.read(webSettingsProvider.notifier).setEnabled(on),
+                ),
+                onTap: () => ref
+                    .read(webSettingsProvider.notifier)
+                    .setEnabled(!settings.enabled),
+              ),
+              PanelRow(
+                leading: const Icon(Icons.dns_outlined),
+                title: const Text('Search server (optional)'),
+                subtitle: Text(
+                  settings.searxUrl ??
+                      'Wikipedia is always used. Add a SearXNG server you run '
+                          'to search the wider web.',
+                ),
+                trailing: Icon(
+                  Icons.edit_outlined,
+                  size: 18,
+                  color: context.colors.muted,
+                ),
+                onTap: () => _editSearx(context, ref, settings.searxUrl),
+              ),
+            ],
           ),
-          ListTile(
-            title: const Text('Search server (optional)'),
-            subtitle: Text(
-              settings.searxUrl ??
-                  'Wikipedia is always used. Add a SearXNG server you run '
-                      'to search the wider web.',
-            ),
-            trailing: const Icon(Icons.edit_outlined),
-            onTap: () => _editSearx(context, ref, settings.searxUrl),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Web activity',
-                    style: theme.textTheme.titleMedium,
+          SectionLabel(
+            'Web activity',
+            trailing: log.isEmpty
+                ? null
+                : TextButton(
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 24),
+                      foregroundColor: context.colors.muted,
+                    ),
+                    onPressed: () {
+                      final db = ref.read(databaseProvider);
+                      db.delete(db.webLogEntries).go();
+                    },
+                    child: const Text('Clear'),
                   ),
-                ),
-                TextButton(
-                  onPressed: log.isEmpty
-                      ? null
-                      : () {
-                          final db = ref.read(databaseProvider);
-                          db.delete(db.webLogEntries).go();
-                        },
-                  child: const Text('Clear'),
-                ),
-              ],
-            ),
           ),
           if (log.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Nothing has been sent.'),
-            ),
-          for (final entry in log)
-            ListTile(
-              dense: true,
-              title: Text('"${entry.query}" → ${entry.provider}'),
-              subtitle: Text(
-                '${entry.at.toLocal().toString().substring(0, 16)}'
-                '${_urls(entry.urlsJson)}',
+            Panel(
+              child: Text(
+                'Nothing has been sent. Every search and every page read '
+                'shows up here.',
+                style: context.text.bodySmall,
               ),
+            )
+          else
+            PanelList(
+              children: [
+                for (final entry in log)
+                  PanelRow(
+                    title: Text(
+                      '"${entry.query}" → ${entry.provider}',
+                      style: context.text.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '${entry.at.toLocal().toString().substring(0, 16)}'
+                      '${_urls(entry.urlsJson)}',
+                    ),
+                  ),
+              ],
             ),
         ],
       ),

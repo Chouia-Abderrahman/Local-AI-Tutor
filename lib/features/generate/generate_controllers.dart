@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import '../../app/providers.dart';
 import '../../core/db/database.dart';
@@ -20,8 +21,14 @@ final generationRunnerProvider = Provider<GenerationRunner>((ref) {
   final db = ref.watch(databaseProvider);
   final runner = GenerationRunner(
     repo: ref.watch(generationRepositoryProvider),
-    prepareModel: () async {
-      final ready = await ref.read(activeModelProvider.notifier).ensureLoaded();
+    prepareModel: (documentId) async {
+      final path = await ref
+          .read(modelResolverProvider)
+          .pathFor(documentId: documentId);
+      if (path == null) return null;
+      final ready = await ref
+          .read(activeModelProvider.notifier)
+          .ensureLoaded(path: path);
       if (!ready) return null;
       return CachedJsonModel(EngineJsonModel(ref.read(llmEngineProvider)), db);
     },
@@ -70,11 +77,15 @@ final sectionFactsProvider =
       return ref.watch(generationRepositoryProvider).factsOfSection(sectionId);
     });
 
-/// The latest speed test for the model in use, or a rough guess.
-final modelSpeedProvider = FutureProvider<ModelSpeed>((ref) async {
-  final model = ref.watch(activeModelProvider);
-  final name = model.fileName;
-  if (name == null) return ModelSpeed.phoneGuess;
+/// The latest speed test of a model file, or a rough guess.
+final modelSpeedProvider = FutureProvider.family<ModelSpeed, String?>((
+  ref,
+  path,
+) async {
+  if (path == null) return ModelSpeed.phoneGuess;
+  // A new speed test refreshes the estimate.
+  ref.watch(modelLabProvider.select((lab) => lab.speed));
+  final name = p.basename(path);
   final db = ref.watch(databaseProvider);
   final run =
       await (db.select(db.benchmarkRuns)

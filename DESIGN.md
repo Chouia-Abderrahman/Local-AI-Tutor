@@ -1,6 +1,8 @@
-# PDF Study Assistant: Design
+# Local AI Tutor: Design
 
-Status, 2026-11-20: built through M7. "As built" notes mark where the app differs from the plan, and section 15 lists what isn't built yet.
+The app was called PDF Study Assistant until M8; the repository and the Dart package keep that working name.
+
+Status, 2026-11-21: built through M8. "As built" notes mark where the app differs from the plan, section 15 lists what isn't built yet, and section 18 describes the look.
 
 ## 1. What it does
 
@@ -45,6 +47,7 @@ The development laptop is used for two things only: running the automated tests,
 | OCR | Google ML Kit text recognition | On-device, behind an `OcrEngine` interface |
 | Web | http, Wikipedia API, pluggable search provider | Off by default |
 | Power | battery_plus | Charging state and level for the power policy |
+| Look | Source Sans 3 (SIL Open Font License), bundled | Ink and paper neutrals with one amber accent, 4 px corners, light and dark themes (section 18) |
 | Background (Android) | Foreground service with a progress notification | Android stops long background work otherwise |
 
 ## 4. Architecture
@@ -193,6 +196,8 @@ The UI shows the four presets as a segmented control, and "Custom…" opens the 
 
 **Model.** Chosen from the phone's RAM and the benchmark, not from the quality level: a ~1-2B model below 8 GB of RAM, a ~3-4B model at 8 GB or more. Deep uses the same model with more checks. A second, larger model is offered only on phones with 12 GB or more, because it needs several more GB of memory.
 
+As built (M8): the app default is chosen in Settings → AI models. Each document can choose its own model, which writes its questions and answers its new conversations, and each conversation can choose its own. A choice resolves conversation, then document, then app default, skipping files that are no longer on the phone. One model is in memory at a time: llamadart frees the old one before it loads the next, and loads run one after another. Work the user waits for (an answer, a web search, a fact check, a model test) first pauses generation, then loads its model; generation resumes afterwards and loads its document's model again, item by item. Speed tests and time estimates are kept per model file.
+
 **Estimates.** A ~20 s benchmark on first run (and after a model change) measures prompt and generation tokens per second. The estimate is the expected prompt and output tokens per stage, summed over the chunks, divided by the measured speeds and by the expected acceptance rate. It is refined live during the run and shown per scope, for example "Chapter 3: ~6 min · whole book: ~3 h (Standard)". Battery cost is shown only after it has been measured on earlier runs on battery.
 
 ## 9. Jobs and progressive generation
@@ -204,7 +209,7 @@ The UI shows the four presets as a segmented control, and "Custom…" opens the 
 - **Upgrade this question** re-runs one fact at a higher level. **Report bad question** retires the question (and the fact, if the fact itself is wrong) and queues a replacement.
 - Power policy, as built (M7): at 20% battery or less, when the phone isn't charging, generation pauses with a message saying why. It resumes when the phone charges or is back at 30%. A charger that is connected but not charging (a hot battery, for one) counts as not charging; the emulator also reports that state with no charger at all. If you resume or pause by hand in between, your choice stands until the battery recovers. Upgrading weak topics while charging is not built. Testing note: battery_plus reads the level from the battery service, which `adb shell dumpsys battery set` doesn't change, so on the emulator the policy is tested with `adb emu power capacity|status|ac`. Verified that way in a release build: paused at 15%, and shown as working again as soon as the emulator was plugged in.
 - Jobs are persisted as small idempotent items (one chunk, one stage). Outputs are cached by `hash(chunk text, model, prompt version, stage params)`. If the app is killed, it resumes after the last finished item.
-- On Android, long runs use a foreground service with a progress notification. As built (M7): a `dataSync` service (flutter_foreground_task) with a partial wake lock runs while the runner works and stops when it stops. Generation itself stays in the app's main isolate; the service only keeps the process alive (verified on the emulator: generation kept going with the app in the background). Android 15 and later allow a data-sync service 6 hours a day. When that runs out the plugin stops the service, generation goes on while the app is open, the service starts again the next time it can, and a job that Android stops resumes from its last finished item.
+- On Android, long runs use a foreground service with a progress notification. As built (M7): a `dataSync` service (flutter_foreground_task) with a partial wake lock runs while the runner works and stops when it stops. Generation itself stays in the app's main isolate; the service only keeps the process alive (verified on the emulator: generation kept going with the app in the background). Android 15 and later allow a data-sync service 6 hours a day. When that runs out the plugin stops the service, generation goes on while the app is open, the service starts again the next time it can, and a job that Android stops resumes from its last finished item. As built (M8): the service runs whenever something long is in progress, not only generation: model downloads (with a Wi-Fi lock, so they keep their speed with the screen off), model loading, chat answers, web searches, fact checks and model tests. The notification names the most urgent one (downloads, then work the user waits for, then loading, then generation) and changes at most once a second.
 
 ## 10. Study, scheduling and mastery
 
@@ -238,6 +243,8 @@ Chat and flashcards share the same facts, so both feed one mastery map.
 
 As built (M5): retrieval is FTS5 alone, with stemmed prefix terms so "osmotic" finds "osmosis"; embeddings can come later. A sentence that cites an excerpt that wasn't given (on the emulator the 0.8B model invented "[5]" with three excerpts and a false inventor of the microscope) counts as unsupported, and a reply that is mostly unsupported counts as "not covered", which offers the web search and hides "Save as card". A chat message pauses background generation (its current step is cancelled and retried later) so the reply doesn't wait behind it. Quiz-me mode is not built yet.
 
+As built (M8): a document has any number of conversations, the most recently active first. An empty one is reused rather than piling up, and each takes its title from its first question. The header shows the conversation's model as a chip, which also changes it (section 8). Stopping an answer keeps what was written so far.
+
 ## 12. Web access and fact-checking
 
 The model never browses on its own. The app runs a fixed pipeline and asks the model only to fill small, schema-constrained slots. With small models this is more reliable than tool calling, and it limits what a malicious page can do.
@@ -264,7 +271,7 @@ The model never browses on its own. The app runs a fixed pipeline and asks the m
 ## 13. Data model (drift / SQLite)
 
 ```
-documents          id, title, path, sha256, pages, language, imported_at, settings
+documents          id, title, path, sha256, pages, language, imported_at, settings, model_path
 sections           id, document_id, parent_id, title, level, ord, page_start, page_end
 chunks             id, document_id, section_id, ord, text, heading_path, page_start, page_end,
                    char_start, char_end, tokens, kind (study|toc|index|refs|front|math), sha256
@@ -281,7 +288,7 @@ jobs               id, document_id, scope, profile, status, priority, created_at
 job_items          id, job_id, chunk_id, stage, status, attempts, cache_key, error
 llm_cache          cache_key, output, created_at
 rejections         id, chunk_id, stage, reason, payload, created_at
-chat_threads       id, document_id, title, summary, created_at
+chat_threads       id, document_id, title, summary, created_at, model_path
 chat_messages      id, thread_id, role, content, citations, used_web, created_at
 web_pages          url, fetched_at, title, text, status
 web_log            id, query, provider, urls, at
@@ -309,8 +316,9 @@ models             id, name, path, kind (chat|embed), bytes, quant, bench_prompt
 | M5 | Chat | Retrieval, streamed answers with citations, not-found handling, modes, make-a-card |
 | M6 | Web | Providers, fetch/extract/cache, fact-check pipeline, conflict view, web in chat, activity log |
 | M7 | Polish | Text recognition for scanned pages (moved from M1), power policy, Android foreground service, settings, CSV export (Anki later), presets tuned from eval results |
+| M8 | Identity and models | The Local AI Tutor name, icon and splash; a compact, low-radius redesign in light and dark; a model per document and per conversation; the background service also covering downloads, loading and answers |
 
-Status, 2026-11-20: M0 to M7 are built (M2 to M6 share one commit). Release builds need the R8 rules in `android/app/proguard-rules.pro`: ML Kit refers to script recognizers the app doesn't bundle, and creates its components by reflection, so without them the build fails and then text recognition fails at runtime. Verified in a release build on the emulator: text recognition of a scanned page, the foreground service notification, and the battery pause. Not built yet:
+Status, 2026-11-21: M0 to M8 are built (M2 to M6 share one commit). Schema 2 adds the two `model_path` columns with a real migration, tested on a database written by schema 1 (earlier upgrades rebuilt the database); the emulator's data survived it too. Verified for M8 in a release build on the emulator: the launcher icon and splash; every screen in light and dark mode; a 533 MB model download that kept going with the app in the background (26% to 68% in 30 seconds, done in about a minute and a half, its notification gone after); and two conversations of one document answering with different model files, the app swapping the file in memory between them. The check caught five problems, all fixed: the send button's icon was invisible (IconButton takes any non-default ambient icon color as every variant's foreground, so the theme sets none); start-aligned tabs need a scrollable TabBar (a debug build would have asserted); bottom sheets opened under the navigation bar (they now use the root navigator); a copied-in file with a catalog name looked identical to its download (it is tagged "Copied in"); and the 0.8B model's `**bold**` showed as asterisks (answers now render it). Release builds need the R8 rules in `android/app/proguard-rules.pro`: ML Kit refers to script recognizers the app doesn't bundle, and creates its components by reflection, so without them the build fails and then text recognition fails at runtime. Verified in a release build on the emulator: text recognition of a scanned page, the foreground service notification, and the battery pause. Not built yet:
 
 - Study: opening the source page with the sentence highlighted (feedback shows the quote and its page number), Upgrade this question, a replacement queued after a report, and a buffer of ready cards kept ahead of a session.
 - Chat: the Quiz me and Summarize section modes, and embeddings (retrieval is FTS5 alone).
@@ -343,3 +351,13 @@ M0, on the development laptop (Ryzen 7 PRO 4750U, llama.cpp on the integrated GP
 M2 eval, 4B model, Standard, on the fixture textbook (4 short passages, laptop): 8 facts, all with verified quotes; 8 cloze cards, 8 flashcards, 6 multiple-choice questions, all passing the blind check; 2 multiple-choice questions rejected for length bias (correct answer about twice as long as the wrong ones), which led to a shorter-answer rule in prompt version 2. Time per passage: facts 77 s, questions 102 s, blind check 15 s (3.2 min in all).
 
 M7, after the JSON repair, 0.8B model on the laptop with the Android emulator running alongside: reads 256 tokens/s, writes 15.7 tokens/s, 14-16 s per question, valid JSON with no constrained retry.
+
+## 18. Identity and interface
+
+As built (M8).
+
+- **Name and mark.** Local AI Tutor. The mark is an open book (two pages with sharp corners) and an amber spark above the spine, drawn on a 24-unit grid. The in-app `AppMark` and `tool/branding/make_icons.py` share that geometry; the script writes the adaptive and themed launcher icons, the Android 12+ splash, the notification icon, PNGs for Android 7 and a 512 px store icon.
+- **Color.** Ink (#15171C) and warm paper (#F6F5F2) neutrals; in dark mode, paper-white on near-black. One amber accent (#E39A2D, #F0AE4C in dark mode) marks progress, highlights and the AI spark. Green and red are kept for right and wrong answers; mastery goes from rust through amber to green. Primary buttons are ink (paper in dark mode), not colored.
+- **Shape and density.** 4 px corners on cards, buttons and inputs, 2 px on tags and bars, 6 px on the top of sheets; a square switch instead of Material's pill. Hairline borders instead of shadows. Compact density and 16 px page gutters; lists are rows in one bordered panel rather than separate cards.
+- **Type.** Source Sans 3, bundled under the SIL Open Font License (listed on the licenses page). Small uppercase labels name sections; stats use tabular figures.
+- **Components** (`lib/app/ui.dart`): Panel, PanelList and PanelRow, SectionLabel, Stat and StatRow, ThinBar, Tag, EmptyState, ModelChip, FileGlyph, SharpSwitch, Wordmark. The theme (`lib/app/theme.dart`) sets every Material component to match, so new screens get the look by default.

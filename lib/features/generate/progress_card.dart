@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/theme.dart';
+import '../../app/ui.dart';
 import '../../core/generate/estimate.dart';
 import '../../core/generate/generation_repository.dart';
 import 'generate_controllers.dart';
@@ -20,10 +22,10 @@ class GenerationProgressCard extends ConsumerWidget {
     final summary = ref.watch(jobSummaryProvider(job.id)).value;
     final runner = ref.watch(runnerStateProvider).value;
     final runnerNotifier = ref.read(generationRunnerProvider);
-    final theme = Theme.of(context);
 
     final active = runner != null && runner.working && runner.jobId == job.id;
     final paused = runner?.paused ?? false;
+    final blocked = runner?.message != null && !active && !paused;
     final done = summary?.done ?? 0;
     final total = summary?.total ?? 0;
     final stage = summary?.remainingByStage.containsKey(Stage.facts) ?? true
@@ -33,50 +35,91 @@ class GenerationProgressCard extends ConsumerWidget {
     final String status;
     if (paused) {
       status = runner?.message ?? 'Paused.';
-    } else if (runner?.message != null && !active) {
+    } else if (blocked) {
       status = runner!.message!;
     } else if (active) {
       final left = runner.secondsLeft;
       status =
-          '$stage · $done of $total steps'
-          '${left == null ? '' : ' · ${approxDuration(Duration(seconds: left))} left'}';
+          '$stage${left == null ? '' : ' · ${approxDuration(Duration(seconds: left))} left'}';
     } else {
-      status = 'Waiting… $done of $total steps done.';
+      status = 'Waiting to start…';
     }
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Panel(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Generating questions', style: theme.textTheme.titleSmall),
+            Row(
+              children: [
+                if (active)
+                  const SizedBox.square(
+                    dimension: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Icon(
+                    paused ? Icons.pause_circle_outline : Icons.schedule,
+                    size: 16,
+                    color: context.colors.muted,
+                  ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    paused ? 'Generation paused' : 'Generating questions',
+                    style: context.text.titleSmall,
+                  ),
+                ),
+                Text(
+                  '$done/$total',
+                  style: context.text.labelMedium?.copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                    color: context.colors.muted,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            ThinBar(value: total == 0 ? 0 : done / total),
             const SizedBox(height: 8),
-            LinearProgressIndicator(value: total == 0 ? null : done / total),
-            const SizedBox(height: 8),
-            Text(status),
+            Text(status, style: context.text.bodySmall),
             if (active && runner.heading != null)
               Text(
                 runner.heading!,
-                style: theme.textTheme.bodySmall,
+                style: context.text.bodySmall,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             if ((summary?.failed ?? 0) > 0)
-              Text(
-                '${summary!.failed} passages failed and were skipped.',
-                style: TextStyle(color: theme.colorScheme.error),
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${plural(summary!.failed, 'passage')} failed and '
+                  '${summary.failed == 1 ? 'was' : 'were'} skipped.',
+                  style: context.text.bodySmall?.copyWith(
+                    color: context.colors.danger,
+                  ),
+                ),
               ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                TextButton(
+                  onPressed: () => runnerNotifier.cancelJob(job.id),
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(color: context.colors.muted),
+                  ),
+                ),
+                const SizedBox(width: 4),
                 if (paused)
                   FilledButton.tonal(
                     onPressed: runnerNotifier.resume,
                     child: const Text('Resume'),
                   )
-                else if (runner?.message != null && !active)
+                else if (blocked)
                   FilledButton.tonal(
                     onPressed: () => context.go('/settings/model'),
                     child: const Text('Set up model'),
@@ -86,10 +129,6 @@ class GenerationProgressCard extends ConsumerWidget {
                     onPressed: runnerNotifier.pause,
                     child: const Text('Pause'),
                   ),
-                TextButton(
-                  onPressed: () => runnerNotifier.cancelJob(job.id),
-                  child: const Text('Cancel'),
-                ),
               ],
             ),
           ],

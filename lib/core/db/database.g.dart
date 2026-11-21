@@ -119,6 +119,17 @@ class $DocumentsTable extends Documents
     requiredDuringInsert: false,
     defaultValue: currentDateAndTime,
   );
+  static const VerificationMeta _modelPathMeta = const VerificationMeta(
+    'modelPath',
+  );
+  @override
+  late final GeneratedColumn<String> modelPath = GeneratedColumn<String>(
+    'model_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -131,6 +142,7 @@ class $DocumentsTable extends Documents
     errorMessage,
     settingsJson,
     importedAt,
+    modelPath,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -211,6 +223,12 @@ class $DocumentsTable extends Documents
         importedAt.isAcceptableOrUnknown(data['imported_at']!, _importedAtMeta),
       );
     }
+    if (data.containsKey('model_path')) {
+      context.handle(
+        _modelPathMeta,
+        modelPath.isAcceptableOrUnknown(data['model_path']!, _modelPathMeta),
+      );
+    }
     return context;
   }
 
@@ -260,6 +278,10 @@ class $DocumentsTable extends Documents
         DriftSqlType.dateTime,
         data['${effectivePrefix}imported_at'],
       )!,
+      modelPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}model_path'],
+      ),
     );
   }
 
@@ -282,6 +304,10 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
   final String? errorMessage;
   final String? settingsJson;
   final DateTime importedAt;
+
+  /// The model file that generates for this document and answers its new
+  /// conversations. Null: the app's default model. (Schema 2.)
+  final String? modelPath;
   const StudyDocument({
     required this.id,
     required this.title,
@@ -293,6 +319,7 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
     this.errorMessage,
     this.settingsJson,
     required this.importedAt,
+    this.modelPath,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -315,6 +342,9 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
       map['settings_json'] = Variable<String>(settingsJson);
     }
     map['imported_at'] = Variable<DateTime>(importedAt);
+    if (!nullToAbsent || modelPath != null) {
+      map['model_path'] = Variable<String>(modelPath);
+    }
     return map;
   }
 
@@ -338,6 +368,9 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
           ? const Value.absent()
           : Value(settingsJson),
       importedAt: Value(importedAt),
+      modelPath: modelPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(modelPath),
     );
   }
 
@@ -357,6 +390,7 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
       errorMessage: serializer.fromJson<String?>(json['errorMessage']),
       settingsJson: serializer.fromJson<String?>(json['settingsJson']),
       importedAt: serializer.fromJson<DateTime>(json['importedAt']),
+      modelPath: serializer.fromJson<String?>(json['modelPath']),
     );
   }
   @override
@@ -373,6 +407,7 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
       'errorMessage': serializer.toJson<String?>(errorMessage),
       'settingsJson': serializer.toJson<String?>(settingsJson),
       'importedAt': serializer.toJson<DateTime>(importedAt),
+      'modelPath': serializer.toJson<String?>(modelPath),
     };
   }
 
@@ -387,6 +422,7 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
     Value<String?> errorMessage = const Value.absent(),
     Value<String?> settingsJson = const Value.absent(),
     DateTime? importedAt,
+    Value<String?> modelPath = const Value.absent(),
   }) => StudyDocument(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -398,6 +434,7 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
     errorMessage: errorMessage.present ? errorMessage.value : this.errorMessage,
     settingsJson: settingsJson.present ? settingsJson.value : this.settingsJson,
     importedAt: importedAt ?? this.importedAt,
+    modelPath: modelPath.present ? modelPath.value : this.modelPath,
   );
   StudyDocument copyWithCompanion(DocumentsCompanion data) {
     return StudyDocument(
@@ -419,6 +456,7 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
       importedAt: data.importedAt.present
           ? data.importedAt.value
           : this.importedAt,
+      modelPath: data.modelPath.present ? data.modelPath.value : this.modelPath,
     );
   }
 
@@ -434,7 +472,8 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
           ..write('status: $status, ')
           ..write('errorMessage: $errorMessage, ')
           ..write('settingsJson: $settingsJson, ')
-          ..write('importedAt: $importedAt')
+          ..write('importedAt: $importedAt, ')
+          ..write('modelPath: $modelPath')
           ..write(')'))
         .toString();
   }
@@ -451,6 +490,7 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
     errorMessage,
     settingsJson,
     importedAt,
+    modelPath,
   );
   @override
   bool operator ==(Object other) =>
@@ -465,7 +505,8 @@ class StudyDocument extends DataClass implements Insertable<StudyDocument> {
           other.status == this.status &&
           other.errorMessage == this.errorMessage &&
           other.settingsJson == this.settingsJson &&
-          other.importedAt == this.importedAt);
+          other.importedAt == this.importedAt &&
+          other.modelPath == this.modelPath);
 }
 
 class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
@@ -479,6 +520,7 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
   final Value<String?> errorMessage;
   final Value<String?> settingsJson;
   final Value<DateTime> importedAt;
+  final Value<String?> modelPath;
   const DocumentsCompanion({
     this.id = const Value.absent(),
     this.title = const Value.absent(),
@@ -490,6 +532,7 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
     this.errorMessage = const Value.absent(),
     this.settingsJson = const Value.absent(),
     this.importedAt = const Value.absent(),
+    this.modelPath = const Value.absent(),
   });
   DocumentsCompanion.insert({
     this.id = const Value.absent(),
@@ -502,6 +545,7 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
     this.errorMessage = const Value.absent(),
     this.settingsJson = const Value.absent(),
     this.importedAt = const Value.absent(),
+    this.modelPath = const Value.absent(),
   }) : title = Value(title),
        sha256 = Value(sha256);
   static Insertable<StudyDocument> custom({
@@ -515,6 +559,7 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
     Expression<String>? errorMessage,
     Expression<String>? settingsJson,
     Expression<DateTime>? importedAt,
+    Expression<String>? modelPath,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -527,6 +572,7 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
       if (errorMessage != null) 'error_message': errorMessage,
       if (settingsJson != null) 'settings_json': settingsJson,
       if (importedAt != null) 'imported_at': importedAt,
+      if (modelPath != null) 'model_path': modelPath,
     });
   }
 
@@ -541,6 +587,7 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
     Value<String?>? errorMessage,
     Value<String?>? settingsJson,
     Value<DateTime>? importedAt,
+    Value<String?>? modelPath,
   }) {
     return DocumentsCompanion(
       id: id ?? this.id,
@@ -553,6 +600,7 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
       errorMessage: errorMessage ?? this.errorMessage,
       settingsJson: settingsJson ?? this.settingsJson,
       importedAt: importedAt ?? this.importedAt,
+      modelPath: modelPath ?? this.modelPath,
     );
   }
 
@@ -589,6 +637,9 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
     if (importedAt.present) {
       map['imported_at'] = Variable<DateTime>(importedAt.value);
     }
+    if (modelPath.present) {
+      map['model_path'] = Variable<String>(modelPath.value);
+    }
     return map;
   }
 
@@ -604,7 +655,8 @@ class DocumentsCompanion extends UpdateCompanion<StudyDocument> {
           ..write('status: $status, ')
           ..write('errorMessage: $errorMessage, ')
           ..write('settingsJson: $settingsJson, ')
-          ..write('importedAt: $importedAt')
+          ..write('importedAt: $importedAt, ')
+          ..write('modelPath: $modelPath')
           ..write(')'))
         .toString();
   }
@@ -1424,7 +1476,7 @@ class Chunk extends DataClass implements Insertable<Chunk> {
   final int pageEnd;
   final int tokenEstimate;
 
-  /// study | toc | index | refs | front | math
+  /// study | toc | bookIndex | refs | front | math (ContentKind.name)
   final String kind;
   final String sha256;
   const Chunk({
@@ -6343,6 +6395,17 @@ class $ChatThreadsTable extends ChatThreads
     requiredDuringInsert: false,
     defaultValue: currentDateAndTime,
   );
+  static const VerificationMeta _modelPathMeta = const VerificationMeta(
+    'modelPath',
+  );
+  @override
+  late final GeneratedColumn<String> modelPath = GeneratedColumn<String>(
+    'model_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -6350,6 +6413,7 @@ class $ChatThreadsTable extends ChatThreads
     title,
     summary,
     createdAt,
+    modelPath,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -6394,6 +6458,12 @@ class $ChatThreadsTable extends ChatThreads
         createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
       );
     }
+    if (data.containsKey('model_path')) {
+      context.handle(
+        _modelPathMeta,
+        modelPath.isAcceptableOrUnknown(data['model_path']!, _modelPathMeta),
+      );
+    }
     return context;
   }
 
@@ -6423,6 +6493,10 @@ class $ChatThreadsTable extends ChatThreads
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
       )!,
+      modelPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}model_path'],
+      ),
     );
   }
 
@@ -6438,12 +6512,17 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
   final String title;
   final String? summary;
   final DateTime createdAt;
+
+  /// The model file that answers in this conversation. Null: the document's
+  /// model. (Schema 2.)
+  final String? modelPath;
   const ChatThread({
     required this.id,
     required this.documentId,
     required this.title,
     this.summary,
     required this.createdAt,
+    this.modelPath,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -6455,6 +6534,9 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
       map['summary'] = Variable<String>(summary);
     }
     map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || modelPath != null) {
+      map['model_path'] = Variable<String>(modelPath);
+    }
     return map;
   }
 
@@ -6467,6 +6549,9 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
           ? const Value.absent()
           : Value(summary),
       createdAt: Value(createdAt),
+      modelPath: modelPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(modelPath),
     );
   }
 
@@ -6481,6 +6566,7 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
       title: serializer.fromJson<String>(json['title']),
       summary: serializer.fromJson<String?>(json['summary']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      modelPath: serializer.fromJson<String?>(json['modelPath']),
     );
   }
   @override
@@ -6492,6 +6578,7 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
       'title': serializer.toJson<String>(title),
       'summary': serializer.toJson<String?>(summary),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'modelPath': serializer.toJson<String?>(modelPath),
     };
   }
 
@@ -6501,12 +6588,14 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
     String? title,
     Value<String?> summary = const Value.absent(),
     DateTime? createdAt,
+    Value<String?> modelPath = const Value.absent(),
   }) => ChatThread(
     id: id ?? this.id,
     documentId: documentId ?? this.documentId,
     title: title ?? this.title,
     summary: summary.present ? summary.value : this.summary,
     createdAt: createdAt ?? this.createdAt,
+    modelPath: modelPath.present ? modelPath.value : this.modelPath,
   );
   ChatThread copyWithCompanion(ChatThreadsCompanion data) {
     return ChatThread(
@@ -6517,6 +6606,7 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
       title: data.title.present ? data.title.value : this.title,
       summary: data.summary.present ? data.summary.value : this.summary,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      modelPath: data.modelPath.present ? data.modelPath.value : this.modelPath,
     );
   }
 
@@ -6527,13 +6617,15 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
           ..write('documentId: $documentId, ')
           ..write('title: $title, ')
           ..write('summary: $summary, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('modelPath: $modelPath')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, documentId, title, summary, createdAt);
+  int get hashCode =>
+      Object.hash(id, documentId, title, summary, createdAt, modelPath);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -6542,7 +6634,8 @@ class ChatThread extends DataClass implements Insertable<ChatThread> {
           other.documentId == this.documentId &&
           other.title == this.title &&
           other.summary == this.summary &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.modelPath == this.modelPath);
 }
 
 class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
@@ -6551,12 +6644,14 @@ class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
   final Value<String> title;
   final Value<String?> summary;
   final Value<DateTime> createdAt;
+  final Value<String?> modelPath;
   const ChatThreadsCompanion({
     this.id = const Value.absent(),
     this.documentId = const Value.absent(),
     this.title = const Value.absent(),
     this.summary = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.modelPath = const Value.absent(),
   });
   ChatThreadsCompanion.insert({
     this.id = const Value.absent(),
@@ -6564,6 +6659,7 @@ class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
     required String title,
     this.summary = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.modelPath = const Value.absent(),
   }) : documentId = Value(documentId),
        title = Value(title);
   static Insertable<ChatThread> custom({
@@ -6572,6 +6668,7 @@ class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
     Expression<String>? title,
     Expression<String>? summary,
     Expression<DateTime>? createdAt,
+    Expression<String>? modelPath,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -6579,6 +6676,7 @@ class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
       if (title != null) 'title': title,
       if (summary != null) 'summary': summary,
       if (createdAt != null) 'created_at': createdAt,
+      if (modelPath != null) 'model_path': modelPath,
     });
   }
 
@@ -6588,6 +6686,7 @@ class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
     Value<String>? title,
     Value<String?>? summary,
     Value<DateTime>? createdAt,
+    Value<String?>? modelPath,
   }) {
     return ChatThreadsCompanion(
       id: id ?? this.id,
@@ -6595,6 +6694,7 @@ class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
       title: title ?? this.title,
       summary: summary ?? this.summary,
       createdAt: createdAt ?? this.createdAt,
+      modelPath: modelPath ?? this.modelPath,
     );
   }
 
@@ -6616,6 +6716,9 @@ class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (modelPath.present) {
+      map['model_path'] = Variable<String>(modelPath.value);
+    }
     return map;
   }
 
@@ -6626,7 +6729,8 @@ class ChatThreadsCompanion extends UpdateCompanion<ChatThread> {
           ..write('documentId: $documentId, ')
           ..write('title: $title, ')
           ..write('summary: $summary, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('modelPath: $modelPath')
           ..write(')'))
         .toString();
   }
@@ -9283,6 +9387,7 @@ typedef $$DocumentsTableCreateCompanionBuilder =
       Value<String?> errorMessage,
       Value<String?> settingsJson,
       Value<DateTime> importedAt,
+      Value<String?> modelPath,
     });
 typedef $$DocumentsTableUpdateCompanionBuilder =
     DocumentsCompanion Function({
@@ -9296,6 +9401,7 @@ typedef $$DocumentsTableUpdateCompanionBuilder =
       Value<String?> errorMessage,
       Value<String?> settingsJson,
       Value<DateTime> importedAt,
+      Value<String?> modelPath,
     });
 
 final class $$DocumentsTableReferences
@@ -9471,6 +9577,11 @@ class $$DocumentsTableFilterComposer
 
   ColumnFilters<DateTime> get importedAt => $composableBuilder(
     column: $table.importedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get modelPath => $composableBuilder(
+    column: $table.modelPath,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -9683,6 +9794,11 @@ class $$DocumentsTableOrderingComposer
     column: $table.importedAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get modelPath => $composableBuilder(
+    column: $table.modelPath,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$DocumentsTableAnnotationComposer
@@ -9731,6 +9847,9 @@ class $$DocumentsTableAnnotationComposer
     column: $table.importedAt,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get modelPath =>
+      $composableBuilder(column: $table.modelPath, builder: (column) => column);
 
   Expression<T> sectionsRefs<T extends Object>(
     Expression<T> Function($$SectionsTableAnnotationComposer a) f,
@@ -9928,6 +10047,7 @@ class $$DocumentsTableTableManager
                 Value<String?> errorMessage = const Value.absent(),
                 Value<String?> settingsJson = const Value.absent(),
                 Value<DateTime> importedAt = const Value.absent(),
+                Value<String?> modelPath = const Value.absent(),
               }) => DocumentsCompanion(
                 id: id,
                 title: title,
@@ -9939,6 +10059,7 @@ class $$DocumentsTableTableManager
                 errorMessage: errorMessage,
                 settingsJson: settingsJson,
                 importedAt: importedAt,
+                modelPath: modelPath,
               ),
           createCompanionCallback:
               ({
@@ -9952,6 +10073,7 @@ class $$DocumentsTableTableManager
                 Value<String?> errorMessage = const Value.absent(),
                 Value<String?> settingsJson = const Value.absent(),
                 Value<DateTime> importedAt = const Value.absent(),
+                Value<String?> modelPath = const Value.absent(),
               }) => DocumentsCompanion.insert(
                 id: id,
                 title: title,
@@ -9963,6 +10085,7 @@ class $$DocumentsTableTableManager
                 errorMessage: errorMessage,
                 settingsJson: settingsJson,
                 importedAt: importedAt,
+                modelPath: modelPath,
               ),
           withReferenceMapper: (p0) => p0
               .map(
@@ -15378,6 +15501,7 @@ typedef $$ChatThreadsTableCreateCompanionBuilder =
       required String title,
       Value<String?> summary,
       Value<DateTime> createdAt,
+      Value<String?> modelPath,
     });
 typedef $$ChatThreadsTableUpdateCompanionBuilder =
     ChatThreadsCompanion Function({
@@ -15386,6 +15510,7 @@ typedef $$ChatThreadsTableUpdateCompanionBuilder =
       Value<String> title,
       Value<String?> summary,
       Value<DateTime> createdAt,
+      Value<String?> modelPath,
     });
 
 final class $$ChatThreadsTableReferences
@@ -15454,6 +15579,11 @@ class $$ChatThreadsTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get modelPath => $composableBuilder(
+    column: $table.modelPath,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -15535,6 +15665,11 @@ class $$ChatThreadsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get modelPath => $composableBuilder(
+    column: $table.modelPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$DocumentsTableOrderingComposer get documentId {
     final $$DocumentsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -15579,6 +15714,9 @@ class $$ChatThreadsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<String> get modelPath =>
+      $composableBuilder(column: $table.modelPath, builder: (column) => column);
 
   $$DocumentsTableAnnotationComposer get documentId {
     final $$DocumentsTableAnnotationComposer composer = $composerBuilder(
@@ -15662,12 +15800,14 @@ class $$ChatThreadsTableTableManager
                 Value<String> title = const Value.absent(),
                 Value<String?> summary = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<String?> modelPath = const Value.absent(),
               }) => ChatThreadsCompanion(
                 id: id,
                 documentId: documentId,
                 title: title,
                 summary: summary,
                 createdAt: createdAt,
+                modelPath: modelPath,
               ),
           createCompanionCallback:
               ({
@@ -15676,12 +15816,14 @@ class $$ChatThreadsTableTableManager
                 required String title,
                 Value<String?> summary = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<String?> modelPath = const Value.absent(),
               }) => ChatThreadsCompanion.insert(
                 id: id,
                 documentId: documentId,
                 title: title,
                 summary: summary,
                 createdAt: createdAt,
+                modelPath: modelPath,
               ),
           withReferenceMapper: (p0) => p0
               .map(

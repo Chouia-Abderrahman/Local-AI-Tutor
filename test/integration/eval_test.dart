@@ -91,7 +91,7 @@ void main() {
       final repo = GenerationRepository(db);
       final runner = GenerationRunner(
         repo: repo,
-        prepareModel: () async => model,
+        prepareModel: (_) async => model,
       );
 
       final watch = Stopwatch()..start();
