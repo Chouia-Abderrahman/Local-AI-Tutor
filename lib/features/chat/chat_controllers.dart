@@ -55,6 +55,11 @@ final chatThreadsProvider = StreamProvider.family<List<ChatThreadInfo>, int>(
       ref.watch(chatRepositoryProvider).watchThreads(documentId),
 );
 
+/// All conversations across documents, most recent first.
+final allChatsProvider = StreamProvider<List<ChatListEntry>>(
+  (ref) => ref.watch(chatRepositoryProvider).watchAllThreads(),
+);
+
 /// The conversation shown for a document.
 final chatThreadProvider = FutureProvider.family<int, int>((
   ref,

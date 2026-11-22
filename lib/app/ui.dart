@@ -710,3 +710,15 @@ String formatDelay(Duration delay) {
   if (days < 365) return 'in ${plural((days / 30).round(), 'month')}';
   return 'in ${plural((days / 365).round(), 'year')}';
 }
+
+/// "5 min ago", "3 days ago", or a date for older things.
+String timeAgo(DateTime at) {
+  final d = DateTime.now().difference(at.toLocal());
+  if (d.inMinutes < 1) return 'just now';
+  if (d.inHours < 1) return '${d.inMinutes} min ago';
+  if (d.inDays < 1) return '${d.inHours} h ago';
+  if (d.inDays < 7) return '${plural(d.inDays, 'day')} ago';
+  final local = at.toLocal();
+  return '${local.year}-${local.month.toString().padLeft(2, '0')}-'
+      '${local.day.toString().padLeft(2, '0')}';
+}

@@ -204,6 +204,32 @@ void main() {
     expect(await repo.messages(second), isEmpty);
   });
 
+  test(
+    'the inbox lists every conversation with messages, newest first',
+    () async {
+      final repo = ChatRepository(db);
+      final other = await db
+          .into(db.documents)
+          .insert(DocumentsCompanion.insert(title: 'Chemistry', sha256: 'c'));
+      final a = await repo.threadFor(documentId);
+      final b = await repo.newThread(other);
+      await repo.newThread(documentId); // empty: not in the inbox
+      await repo.add(a, 'user', 'What is osmosis?');
+      await repo.add(b, 'user', 'What is a mole?');
+
+      var inbox = await repo.watchAllThreads().first;
+      expect(inbox.map((e) => e.info.thread.id), [b, a]);
+      expect(inbox.first.documentTitle, 'Chemistry');
+      expect(inbox.first.documentId, other);
+
+      // Activity moves a conversation to the top.
+      await repo.add(a, 'assistant', 'Water moves.');
+      inbox = await repo.watchAllThreads().first;
+      expect(inbox.map((e) => e.info.thread.id), [a, b]);
+      expect(inbox.first.info.messageCount, 2);
+    },
+  );
+
   test('conversation titles come from the first question', () {
     expect(
       ChatRepository.titleFrom('  What is\nosmosis? '),

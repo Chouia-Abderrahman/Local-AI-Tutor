@@ -57,7 +57,7 @@ class DocumentScreen extends ConsumerWidget {
               icon: const Icon(Icons.chat_bubble_outline, size: 21),
               onPressed: () {
                 ref.read(chatDocumentProvider.notifier).select(documentId);
-                context.go('/chat');
+                context.go('/chat/conversation');
               },
             ),
             PopupMenuButton<String>(

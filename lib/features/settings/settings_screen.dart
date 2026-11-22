@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/app.dart';
+import '../../app/appearance.dart';
 import '../../app/theme.dart';
 import '../../app/ui.dart';
 import '../model/model_controllers.dart';
@@ -29,6 +30,8 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(Tokens.gutter, 0, Tokens.gutter, 32),
         children: [
+          const SectionLabel('Appearance'),
+          const _ThemePicker(),
           const SectionLabel('AI'),
           PanelList(
             children: [
@@ -105,6 +108,41 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// System, light or dark.
+class _ThemePicker extends ConsumerWidget {
+  const _ThemePicker();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(themeModeProvider);
+    return Panel(
+      child: SegmentedButton<ThemeMode>(
+        showSelectedIcon: false,
+        segments: const [
+          ButtonSegment(
+            value: ThemeMode.system,
+            icon: Icon(Icons.brightness_auto_outlined, size: 18),
+            label: Text('System'),
+          ),
+          ButtonSegment(
+            value: ThemeMode.light,
+            icon: Icon(Icons.light_mode_outlined, size: 18),
+            label: Text('Light'),
+          ),
+          ButtonSegment(
+            value: ThemeMode.dark,
+            icon: Icon(Icons.dark_mode_outlined, size: 18),
+            label: Text('Dark'),
+          ),
+        ],
+        selected: {mode},
+        onSelectionChanged: (s) =>
+            ref.read(themeModeProvider.notifier).set(s.single),
       ),
     );
   }

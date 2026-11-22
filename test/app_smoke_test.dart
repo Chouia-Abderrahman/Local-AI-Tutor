@@ -31,6 +31,25 @@ void main() {
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('AI models'), findsOneWidget);
+
+    // The theme can be set by hand.
+    expect(
+      Theme.of(tester.element(find.text('AI models'))).brightness,
+      Brightness.light,
+    );
+    await tester.tap(find.text('Dark'));
+    await tester.pumpAndSettle();
+    expect(
+      Theme.of(tester.element(find.text('AI models'))).brightness,
+      Brightness.dark,
+    );
+
+    // Chat lists conversations; with no document there is nothing yet.
+    await tester.tap(find.text('Chat'));
+    await tester.pumpAndSettle();
+    expect(find.text('Nothing to talk about yet'), findsOneWidget);
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
     expect(find.text('Not set up'), findsOneWidget);
 
     // Dispose the scope, let drift's stream cleanup timers fire, then close

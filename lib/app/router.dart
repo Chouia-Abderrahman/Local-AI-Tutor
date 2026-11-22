@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/chat/chat_list_screen.dart';
 import '../features/chat/chat_screen.dart';
 import '../features/home/home_shell.dart';
 import '../features/library/document_screen.dart';
@@ -70,7 +71,13 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: '/chat',
-                builder: (context, state) => const ChatScreen(),
+                builder: (context, state) => const ChatListScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'conversation',
+                    builder: (context, state) => const ChatScreen(),
+                  ),
+                ],
               ),
             ],
           ),

@@ -217,6 +217,17 @@ class ChatThreadInfo {
   final DateTime? lastAt;
 }
 
+/// A conversation in the chat inbox, with the document it is about.
+@immutable
+class ChatListEntry {
+  const ChatListEntry({required this.info, required this.documentTitle});
+
+  final ChatThreadInfo info;
+  final String documentTitle;
+
+  int get documentId => info.thread.documentId;
+}
+
 class ChatRepository {
   ChatRepository(this.db);
 
@@ -255,6 +266,32 @@ class ChatRepository {
           lastAt: row.readNullable<DateTime>('last_at'),
         ),
       );
+
+  /// Every conversation that has messages, across documents, the most
+  /// recently active first: the chat inbox.
+  Stream<List<ChatListEntry>> watchAllThreads() => db
+      .customSelect(
+        'SELECT t.*, d.title AS document_title, '
+        'COUNT(m.id) AS message_count, '
+        'MAX(m.created_at) AS last_at, MAX(m.id) AS last_id '
+        'FROM chat_threads t '
+        'JOIN documents d ON d.id = t.document_id '
+        'JOIN chat_messages m ON m.thread_id = t.id '
+        'GROUP BY t.id '
+        'ORDER BY last_id DESC',
+        readsFrom: {db.chatThreads, db.chatMessages, db.documents},
+      )
+      .map(
+        (row) => ChatListEntry(
+          info: ChatThreadInfo(
+            thread: db.chatThreads.map(row.data),
+            messageCount: row.read<int>('message_count'),
+            lastAt: row.readNullable<DateTime>('last_at'),
+          ),
+          documentTitle: row.read<String>('document_title'),
+        ),
+      )
+      .watch();
 
   Future<List<ChatThreadInfo>> threads(int documentId) =>
       _threads(documentId).get();

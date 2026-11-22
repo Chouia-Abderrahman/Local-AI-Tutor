@@ -437,7 +437,7 @@ class _ConversationsSheet extends ConsumerWidget {
                     subtitle: Text(
                       [
                         plural(info.messageCount, 'message'),
-                        if (info.lastAt != null) _ago(info.lastAt!),
+                        if (info.lastAt != null) timeAgo(info.lastAt!),
                         if (info.thread.modelPath != null)
                           modelDisplayName(info.thread.modelPath!),
                       ].join(' · '),
@@ -504,17 +504,6 @@ class _ConversationsSheet extends ConsumerWidget {
     await ref
         .read(chatControllerProvider.notifier)
         .deleteConversation(document.id, info.thread.id);
-  }
-
-  static String _ago(DateTime at) {
-    final d = DateTime.now().difference(at.toLocal());
-    if (d.inMinutes < 1) return 'just now';
-    if (d.inHours < 1) return '${d.inMinutes} min ago';
-    if (d.inDays < 1) return '${d.inHours} h ago';
-    if (d.inDays < 7) return '${plural(d.inDays, 'day')} ago';
-    final local = at.toLocal();
-    return '${local.year}-${local.month.toString().padLeft(2, '0')}-'
-        '${local.day.toString().padLeft(2, '0')}';
   }
 }
 
@@ -1120,7 +1109,7 @@ class _ModeToggle extends StatelessWidget {
 /// Opens the chat about [document].
 void openChat(BuildContext context, WidgetRef ref, StudyDocument document) {
   ref.read(chatDocumentProvider.notifier).select(document.id);
-  context.go('/chat');
+  context.go('/chat/conversation');
 }
 
 /// `**bold**` in a reply, as bold text.
