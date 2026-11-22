@@ -123,6 +123,59 @@ void main() {
     });
   });
 
+  group('GPU loads', () {
+    late Directory dir;
+    late String model;
+    late AppDatabase db;
+    late FakeLlmEngine engine;
+    late ProviderContainer container;
+
+    setUp(() async {
+      dir = Directory.systemTemp.createTempSync('gpu');
+      model = (File('${dir.path}/A-Q4_0.gguf')..writeAsStringSync('gguf')).path;
+      db = AppDatabase(NativeDatabase.memory());
+      engine = FakeLlmEngine()..failOnGpu = true;
+      container = ProviderContainer(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          llmEngineProvider.overrideWithValue(engine as LlmEngine),
+          modelDownloadsProvider.overrideWith(_NoDownloads.new),
+        ],
+      );
+      await db.setSetting(ActiveModel.settingKey, model);
+      await db.setSetting(ActiveModel.backendKey, LlmBackend.opencl.name);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+      dir.deleteSync(recursive: true);
+    });
+
+    test('a GPU that cannot load the model falls back to the CPU', () async {
+      final models = container.read(activeModelProvider.notifier);
+      expect(await models.ensureLoaded(), isTrue);
+      final state = container.read(activeModelProvider);
+      expect(state.phase, ModelPhase.ready);
+      expect(models.backend, LlmBackend.cpu);
+      expect(models.backendNotice, contains('went back to the CPU'));
+      // Remembered, and no stale "loading" flag is left.
+      expect(await db.getSetting(ActiveModel.backendKey), 'cpu');
+      expect(await db.getSetting(ActiveModel.loadingKey), isNull);
+    });
+
+    test('a GPU load that never finished is settled at launch', () async {
+      // The app died or was killed in the driver during the last load.
+      await db.setSetting(ActiveModel.loadingKey, model);
+      container.read(activeModelProvider);
+      await pumpEventQueue();
+      final models = container.read(activeModelProvider.notifier);
+      expect(models.backend, LlmBackend.cpu);
+      expect(await db.getSetting(ActiveModel.backendKey), 'cpu');
+      expect(await db.getSetting(ActiveModel.loadingKey), isNull);
+    });
+  });
+
   test('the background notification names the most urgent work', () async {
     final db = AppDatabase(NativeDatabase.memory());
     final runnerStates = StreamController<RunnerState>.broadcast();

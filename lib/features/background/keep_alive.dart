@@ -224,6 +224,12 @@ class KeepAlive {
           eventAction: ForegroundTaskEventAction.nothing(),
           allowWakeLock: true,
           allowWifiLock: true,
+          // The work runs in the app's own isolate, which ends when the app
+          // is swiped away. A service that outlived it kept the process
+          // alive with a stale notification, and the next launch landed in
+          // that process and never drew its first frame.
+          stopWithTask: true,
+          allowAutoRestart: false,
         ),
       );
       _initialized = true;

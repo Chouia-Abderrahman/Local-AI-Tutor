@@ -23,6 +23,10 @@ class FakeLlmEngine implements LlmEngine {
   /// Used when the script is empty.
   FakeResponder? responder;
 
+  /// Loading on a GPU backend fails, as it does on a phone whose GPU driver
+  /// can't run the model.
+  bool failOnGpu = false;
+
   final List<Object> _script = [];
 
   /// Every request received, in order.
@@ -45,6 +49,9 @@ class FakeLlmEngine implements LlmEngine {
     String modelPath, {
     LlmLoadOptions options = const LlmLoadOptions(),
   }) async {
+    if (failOnGpu && options.backend != LlmBackend.cpu) {
+      throw LlmException('The GPU driver could not run the model.');
+    }
     _loaded = true;
     _modelName = modelPath.split('/').last;
   }

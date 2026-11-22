@@ -106,7 +106,11 @@ class ActiveModel extends Notifier<ActiveModelState> {
 
   @override
   ActiveModelState build() {
-    Future.microtask(_restore);
+    Future.microtask(() async {
+      // Settle a GPU load that never finished before anything else runs.
+      await _readBackend();
+      await _restore();
+    });
     return const ActiveModelState();
   }
 
@@ -207,6 +211,14 @@ class ActiveModel extends Notifier<ActiveModelState> {
       // A load that failed cleanly is no crash.
       if (loadBackend != LlmBackend.cpu) {
         await db.setSetting(loadingKey, null);
+        // The GPU could not run this model: use the CPU from now on and try
+        // again, instead of leaving the user with a model that won't load.
+        backendNotice =
+            'The ${loadBackend.label} could not load the model, so the app '
+            'went back to the CPU. ($error)';
+        _backend = LlmBackend.cpu;
+        await db.setSetting(backendKey, LlmBackend.cpu.name);
+        if (ref.mounted) return _ensure(target);
       }
       if (!ref.mounted) return false;
       // A failed load leaves no model in memory.
