@@ -146,6 +146,10 @@ class ActiveModel extends Notifier<ActiveModelState> {
     return _backend;
   }
 
+  /// The backend models run on, once read from the settings (and a GPU load
+  /// that never finished has been settled).
+  Future<LlmBackend> currentBackend() => _readBackend();
+
   /// Runs models on [backend] from now on; the model in memory reloads.
   Future<void> setBackend(LlmBackend backend) async {
     await ref.read(databaseProvider).setSetting(backendKey, backend.name);
@@ -153,8 +157,51 @@ class ActiveModel extends Notifier<ActiveModelState> {
     _backend = backend;
     _backendRead = true;
     final loaded = state.loadedPath;
+    if (loaded == null) return;
     await unload();
-    if (loaded != null) await ensureLoaded(path: loaded);
+    await ensureLoaded(path: loaded);
+  }
+
+  /// Loads [path] on exactly [backend], with no fallback, and reports the
+  /// backend that really runs it. For the speed comparison, which must see
+  /// what a backend does by itself.
+  Future<String> loadOn(String path, LlmBackend backend) {
+    final done = _lock.then((_) => _loadOn(path, backend));
+    _lock = done.then((_) {}, onError: (Object _) {});
+    return done;
+  }
+
+  Future<String> _loadOn(String path, LlmBackend backend) async {
+    final db = ref.read(databaseProvider);
+    state = state.copyWith(
+      targetPath: path,
+      phase: ModelPhase.loading,
+      error: null,
+    );
+    try {
+      if (backend != LlmBackend.cpu) await db.setSetting(loadingKey, path);
+      await _engine.load(path, options: LlmLoadOptions(backend: backend));
+      if (backend != LlmBackend.cpu) await db.setSetting(loadingKey, null);
+      final name = await _engine.backendName();
+      if (ref.mounted) {
+        state = state.copyWith(
+          loadedPath: path,
+          phase: ModelPhase.ready,
+          backend: name,
+        );
+      }
+      return name;
+    } on Object {
+      if (backend != LlmBackend.cpu) await db.setSetting(loadingKey, null);
+      if (ref.mounted) {
+        state = state.copyWith(
+          loadedPath: null,
+          phase: ModelPhase.none,
+          backend: null,
+        );
+      }
+      rethrow;
+    }
   }
 
   /// The default model's file, once read from the settings.

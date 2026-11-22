@@ -6,6 +6,7 @@ import '../../app/theme.dart';
 import '../background/keep_alive.dart';
 import '../generate/generate_controllers.dart';
 import '../generate/power_policy.dart';
+import '../model/backend_tuner.dart';
 
 /// Bottom navigation between the four main tabs.
 class HomeShell extends ConsumerWidget {
@@ -20,6 +21,8 @@ class HomeShell extends ConsumerWidget {
     // Keep downloads, model loading, answers and generation going when the
     // app goes to the background (Android).
     ref.watch(keepAliveProvider);
+    // Settle a backend speed test the app died in.
+    ref.read(backendTunerProvider);
     // Pause generation on low battery when not plugged in (Android).
     ref.watch(powerPolicyProvider);
     return Scaffold(

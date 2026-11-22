@@ -82,6 +82,17 @@ class SpeedResult {
   final QuestionCheck question;
 }
 
+/// Reading and writing speed, in tokens per second.
+class QuickSpeed {
+  const QuickSpeed({
+    required this.readTokensPerSecond,
+    required this.writeTokensPerSecond,
+  });
+
+  final double readTokensPerSecond;
+  final double writeTokensPerSecond;
+}
+
 class QuestionCheck {
   const QuestionCheck({
     required this.json,
@@ -187,6 +198,47 @@ class ModelChecks {
       nextQuestion: second.elapsed,
       cachedPromptShare: _share(second.usage),
       question: first,
+    );
+  }
+
+  /// Reading and writing speed only: three short requests, fast enough to
+  /// run on every backend in a row.
+  Future<QuickSpeed> quickSpeed({void Function(String step)? onStep}) async {
+    onStep?.call('Warming up');
+    await engine.complete(const [
+      LlmMessage.user('Reply with OK.'),
+    ], params: const LlmParams(maxTokens: 4, temperature: 0));
+
+    onStep?.call('Reading');
+    final read = await engine.complete(
+      const [
+        LlmMessage.user(
+          'Read this passage, then reply with the single word "done".'
+          '\n\n$samplePassage',
+        ),
+      ],
+      params: const LlmParams(
+        maxTokens: 3,
+        temperature: 0,
+        reusePromptPrefix: false,
+      ),
+    );
+
+    onStep?.call('Writing');
+    final write = await engine.complete(const [
+      LlmMessage.user(
+        'Write a long, detailed paragraph about how a public library '
+        'organizes its books.',
+      ),
+    ], params: const LlmParams(maxTokens: 64, temperature: 0.7));
+
+    return QuickSpeed(
+      readTokensPerSecond:
+          read.perf?.promptTokensPerSecond ??
+          _rate(read.usage?.promptTokens, read.usage?.duration),
+      writeTokensPerSecond:
+          write.perf?.generationTokensPerSecond ??
+          _rate(write.usage?.completionTokens, write.usage?.duration),
     );
   }
 

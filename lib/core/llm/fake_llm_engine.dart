@@ -27,6 +27,20 @@ class FakeLlmEngine implements LlmEngine {
   /// can't run the model.
   bool failOnGpu = false;
 
+  /// Report the backend each load asked for (`CPU`, `OpenCL`, `Vulkan`)
+  /// instead of `fake`.
+  bool reportBackends = false;
+
+  /// Backends that quietly run on the CPU, as a phone without that GPU
+  /// driver does.
+  final Set<LlmBackend> fallsBackToCpu = {};
+
+  /// Measured speeds per backend, as tokens per second: reading, writing.
+  /// Empty: no timing is reported.
+  final Map<LlmBackend, (double, double)> speeds = {};
+
+  LlmBackend _backend = LlmBackend.cpu;
+
   final List<Object> _script = [];
 
   /// Every request received, in order.
@@ -53,6 +67,7 @@ class FakeLlmEngine implements LlmEngine {
       throw LlmException('The GPU driver could not run the model.');
     }
     _loaded = true;
+    _backend = options.backend;
     _modelName = modelPath.split('/').last;
   }
 
@@ -80,7 +95,20 @@ class FakeLlmEngine implements LlmEngine {
     LlmParams params = const LlmParams(),
   }) async {
     final text = _asText(_next(messages, null));
-    return LlmResult(text: text, usage: _usage(messages, text));
+    final usage = _usage(messages, text);
+    final speed = speeds[_backend];
+    return LlmResult(
+      text: text,
+      usage: usage,
+      perf: speed == null
+          ? null
+          : LlmPerf(
+              promptTokens: usage.promptTokens,
+              promptMs: usage.promptTokens * 1000 / speed.$1,
+              generatedTokens: usage.completionTokens,
+              generationMs: usage.completionTokens * 1000 / speed.$2,
+            ),
+    );
   }
 
   @override
@@ -103,7 +131,15 @@ class FakeLlmEngine implements LlmEngine {
   Future<int> countTokens(String text) async => estimateTokens(text);
 
   @override
-  Future<String> backendName() async => 'fake';
+  Future<String> backendName() async {
+    if (!reportBackends) return 'fake';
+    if (fallsBackToCpu.contains(_backend)) return 'CPU';
+    return switch (_backend) {
+      LlmBackend.cpu => 'CPU',
+      LlmBackend.opencl => 'OpenCL',
+      LlmBackend.vulkan => 'Vulkan',
+    };
+  }
 
   @override
   void cancel() {}

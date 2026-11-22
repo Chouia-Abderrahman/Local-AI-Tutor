@@ -8,6 +8,8 @@ import '../../core/llm/installed_model.dart';
 import '../../core/llm/llm_engine.dart';
 import '../../core/llm/model_catalog.dart';
 import '../../core/llm/model_checks.dart';
+import '../../core/llm/backend_benchmark.dart';
+import 'backend_tuner.dart';
 import 'model_controllers.dart';
 
 /// The models on this phone: which one is the default, downloads, and tests.
@@ -586,7 +588,9 @@ class _QuestionView extends StatelessWidget {
   }
 }
 
-/// Where models run: CPU, or the GPU through OpenCL or Vulkan.
+/// Where models run: CPU, or the GPU through OpenCL or Vulkan. One button
+/// tests the default model on all three and switches to the fastest; the
+/// picker below it still lets the user choose another.
 class _BackendPanel extends ConsumerStatefulWidget {
   const _BackendPanel();
 
@@ -599,12 +603,90 @@ class _BackendPanelState extends ConsumerState<_BackendPanel> {
 
   @override
   Widget build(BuildContext context) {
-    ref.watch(activeModelProvider);
+    final model = ref.watch(activeModelProvider);
     final models = ref.read(activeModelProvider.notifier);
+    final tuner = ref.watch(backendTunerProvider);
+    final last = ref.watch(lastBenchmarkProvider).value;
+    final fastest = last?.fastest;
+    final inUse = models.backend;
+    final busy = tuner.busy || _switching;
+    // While testing, show what has been measured so far; after, the last run.
+    final results = tuner.busy ? tuner.results : (last?.results ?? const []);
+    final colors = context.colors;
+
     return Panel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          FilledButton.icon(
+            onPressed: busy || model.path == null
+                ? null
+                : () => ref.read(backendTunerProvider.notifier).run(),
+            icon: const Icon(Icons.speed, size: 20),
+            label: Text(
+              last == null ? 'Test all and pick the fastest' : 'Test again',
+            ),
+          ),
+          if (tuner.busy) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    tuner.step ?? 'Testing',
+                    style: context.text.bodyMedium,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      ref.read(backendTunerProvider.notifier).stop(),
+                  child: const Text('Skip the rest'),
+                ),
+              ],
+            ),
+          ],
+          if (tuner.error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              tuner.error!,
+              style: context.text.bodySmall?.copyWith(color: colors.danger),
+            ),
+          ],
+          if (results.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            for (final backend in LlmBackend.values)
+              _ResultRow(
+                backend: backend,
+                result: results.where((r) => r.backend == backend).firstOrNull,
+                shortest: results
+                    .where((r) => r.ok && r.typicalSeconds.isFinite)
+                    .fold<double>(
+                      double.infinity,
+                      (m, r) => r.typicalSeconds < m ? r.typicalSeconds : m,
+                    ),
+                testing: tuner.busy && tuner.current == backend,
+                fastest: !tuner.busy && fastest?.backend == backend,
+                inUse: inUse == backend,
+              ),
+            const SizedBox(height: 2),
+            Text(
+              tuner.busy
+                  ? 'Ranked by the time for a typical question.'
+                  : 'Tested ${timeAgo(last!.at)} on '
+                        '${modelDisplayName(last.modelFile)}. Ranked by the time '
+                        'for a typical question: reading a passage, then '
+                        'writing a reply.',
+              style: context.text.bodySmall,
+            ),
+          ],
+          const SizedBox(height: 14),
+          Text('Run on', style: context.text.labelSmall),
+          const SizedBox(height: 8),
           SegmentedButton<LlmBackend>(
             segments: [
               for (final b in LlmBackend.values)
@@ -617,9 +699,9 @@ class _BackendPanelState extends ConsumerState<_BackendPanel> {
                   }),
                 ),
             ],
-            selected: {models.backend},
+            selected: {inUse},
             showSelectedIcon: false,
-            onSelectionChanged: _switching
+            onSelectionChanged: busy
                 ? null
                 : (s) async {
                     setState(() => _switching = true);
@@ -631,24 +713,103 @@ class _BackendPanelState extends ConsumerState<_BackendPanel> {
                   },
           ),
           const SizedBox(height: 8),
-          if (models.backendNotice != null && !_switching) ...[
+          if (models.backendNotice != null && !busy) ...[
             Text(
               models.backendNotice!,
-              style: context.text.bodySmall?.copyWith(
-                color: context.colors.danger,
-              ),
+              style: context.text.bodySmall?.copyWith(color: colors.danger),
             ),
             const SizedBox(height: 6),
           ],
           Text(
             _switching
                 ? 'Reloading the model…'
-                : 'CPU is the safe default. On Snapdragon phones try OpenCL, '
-                      'and run the speed test after each switch; Vulkan can be '
-                      'slower than the CPU on Adreno GPUs. A GPU the phone '
-                      "can't use falls back to the CPU.",
+                : fastest != null && fastest.backend != inUse && !tuner.busy
+                ? 'You chose ${inUse.label}; ${fastest.backend.label} was '
+                      'fastest in the last test. Your choice stands.'
+                : 'The fastest backend is chosen after a test. You can '
+                      'still pick another here. A GPU the phone can\'t use '
+                      'falls back to the CPU.',
             style: context.text.bodySmall,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One backend in the comparison: its speeds as a bar, or why it has none.
+class _ResultRow extends StatelessWidget {
+  const _ResultRow({
+    required this.backend,
+    required this.result,
+    required this.shortest,
+    required this.testing,
+    required this.fastest,
+    required this.inUse,
+  });
+
+  final LlmBackend backend;
+  final BackendResult? result;
+  final double shortest;
+  final bool testing;
+  final bool fastest;
+  final bool inUse;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final r = result;
+    final ok = r != null && r.ok;
+    final headline = testing
+        ? 'Testing…'
+        : r == null
+        ? 'Waiting'
+        : ok
+        ? 'about ${r.typicalSeconds.toStringAsFixed(0)} s per question'
+        : (r.note ?? 'Not tested');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(backend.label, style: context.text.titleSmall),
+              const SizedBox(width: 8),
+              if (fastest) const Tag('Fastest', tone: TagTone.success),
+              if (inUse) ...[
+                if (fastest) const SizedBox(width: 6),
+                const Tag('In use', tone: TagTone.accent),
+              ],
+              const Spacer(),
+              Flexible(
+                child: Text(
+                  headline,
+                  textAlign: TextAlign.end,
+                  style: context.text.bodySmall?.copyWith(
+                    color: !ok && !testing && r != null ? colors.muted : null,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ThinBar(
+            // A shorter time is a longer bar.
+            value: ok && r.typicalSeconds.isFinite
+                ? shortest / r.typicalSeconds
+                : 0,
+            height: 6,
+            color: fastest ? colors.success : colors.accent,
+          ),
+          if (ok) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Write ${r.writeTokensPerSecond.toStringAsFixed(1)} · '
+              'read ${r.readTokensPerSecond.toStringAsFixed(0)} tokens/s',
+              style: context.text.labelSmall?.copyWith(letterSpacing: 0.2),
+            ),
+          ],
         ],
       ),
     );

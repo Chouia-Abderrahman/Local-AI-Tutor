@@ -27,6 +27,30 @@ class ModelUse {
     String? modelPath,
     required Future<T> Function(LlmEngine engine) body,
   }) {
+    return exclusive(title, detail: detail, () async {
+      final path =
+          modelPath ??
+          await _ref
+              .read(modelResolverProvider)
+              .pathFor(documentId: documentId, threadId: threadId);
+      final models = _ref.read(activeModelProvider.notifier);
+      if (path == null || !await models.ensureLoaded(path: path)) {
+        throw LlmException(
+          _ref.read(activeModelProvider).error ??
+              'Set up an AI model first (Settings → AI models).',
+        );
+      }
+      return body(_ref.read(llmEngineProvider));
+    });
+  }
+
+  /// Runs [body] as a background task with the model to itself: generation
+  /// steps aside first and resumes afterwards. [body] loads whatever it needs.
+  Future<T> exclusive<T>(
+    String title,
+    Future<T> Function() body, {
+    String? detail,
+  }) {
     return _ref.read(backgroundTasksProvider.notifier).run(title, () async {
       final runner = _ref.read(generationRunnerProvider);
       // isActive also covers a runner that is still loading its model.
@@ -37,19 +61,7 @@ class ModelUse {
         await runner.idle();
       }
       try {
-        final path =
-            modelPath ??
-            await _ref
-                .read(modelResolverProvider)
-                .pathFor(documentId: documentId, threadId: threadId);
-        final models = _ref.read(activeModelProvider.notifier);
-        if (path == null || !await models.ensureLoaded(path: path)) {
-          throw LlmException(
-            _ref.read(activeModelProvider).error ??
-                'Set up an AI model first (Settings → AI models).',
-          );
-        }
-        return await body(_ref.read(llmEngineProvider));
+        return await body();
       } finally {
         if (yielded) runner.resume();
       }
