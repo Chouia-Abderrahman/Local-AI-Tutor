@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:llamadart/llamadart.dart'
     show
@@ -18,6 +19,7 @@ import '../../core/llm/installed_model.dart';
 import '../../core/llm/llm_engine.dart';
 import '../../core/llm/model_catalog.dart';
 import '../../core/llm/model_checks.dart';
+import '../background/progress_notification.dart';
 import 'model_use.dart';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +86,19 @@ class ActiveModelState {
 
 class ActiveModel extends Notifier<ActiveModelState> {
   static const settingKey = 'active_model_path';
+  static const backendKey = 'model_backend';
+
+  /// The model file a GPU load started on and has not finished. Still set
+  /// at the next launch means that load crashed or hung the app.
+  static const loadingKey = 'model_load_in_progress';
+
+  /// Where models run; CPU until the user picks a GPU backend.
+  LlmBackend _backend = LlmBackend.cpu;
+  bool _backendRead = false;
+  LlmBackend get backend => _backend;
+
+  /// Set when the app went back to the CPU because a GPU load never finished.
+  String? backendNotice;
 
   /// Loads run one after another, so two callers never swap models under
   /// each other.
@@ -101,6 +116,41 @@ class ActiveModel extends Notifier<ActiveModelState> {
     final path = await ref.read(databaseProvider).getSetting(settingKey);
     if (!ref.mounted || path == null || state.path != null) return;
     if (File(path).existsSync()) state = state.copyWith(path: path);
+  }
+
+  Future<LlmBackend> _readBackend() async {
+    if (!_backendRead) {
+      final db = ref.read(databaseProvider);
+      final name = await db.getSetting(backendKey);
+      _backend =
+          LlmBackend.values.where((b) => b.name == name).firstOrNull ??
+          LlmBackend.cpu;
+      if (await db.getSetting(loadingKey) != null) {
+        // The last GPU load never finished: the app died or was killed in
+        // the driver. Loading again would do it again at every launch.
+        await db.setSetting(loadingKey, null);
+        if (_backend != LlmBackend.cpu) {
+          backendNotice =
+              'Loading the model on the ${_backend.label} did not finish '
+              'last time, so the app went back to the CPU.';
+          _backend = LlmBackend.cpu;
+          await db.setSetting(backendKey, LlmBackend.cpu.name);
+        }
+      }
+      _backendRead = true;
+    }
+    return _backend;
+  }
+
+  /// Runs models on [backend] from now on; the model in memory reloads.
+  Future<void> setBackend(LlmBackend backend) async {
+    await ref.read(databaseProvider).setSetting(backendKey, backend.name);
+    backendNotice = null;
+    _backend = backend;
+    _backendRead = true;
+    final loaded = state.loadedPath;
+    await unload();
+    if (loaded != null) await ensureLoaded(path: loaded);
   }
 
   /// The default model's file, once read from the settings.
@@ -137,8 +187,14 @@ class ActiveModel extends Notifier<ActiveModelState> {
       phase: ModelPhase.loading,
       error: null,
     );
+    final loadBackend = await _readBackend();
+    final db = ref.read(databaseProvider);
     try {
-      await _engine.load(target);
+      if (loadBackend != LlmBackend.cpu) {
+        await db.setSetting(loadingKey, target);
+      }
+      await _engine.load(target, options: LlmLoadOptions(backend: loadBackend));
+      if (loadBackend != LlmBackend.cpu) await db.setSetting(loadingKey, null);
       final backend = await _engine.backendName();
       if (!ref.mounted) return false;
       state = state.copyWith(
@@ -148,6 +204,10 @@ class ActiveModel extends Notifier<ActiveModelState> {
       );
       return true;
     } on Object catch (error) {
+      // A load that failed cleanly is no crash.
+      if (loadBackend != LlmBackend.cpu) {
+        await db.setSetting(loadingKey, null);
+      }
       if (!ref.mounted) return false;
       // A failed load leaves no model in memory.
       state = state.copyWith(
@@ -389,6 +449,15 @@ class ModelDownloads extends Notifier<Map<String, DownloadStatus>> {
     try {
       final entry = await controller.start(ModelSource.parse(spec.source));
       _put(spec.id, DownloadStatus(DownloadPhase.ready, path: entry.filePath));
+      // Someone who left the app should hear that it finished.
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        unawaited(
+          ProgressNotification.done(
+            title: '${spec.name} is ready',
+            text: 'The model finished downloading.',
+          ),
+        );
+      }
       if (ref.mounted && ref.read(activeModelProvider).path == null) {
         await ref.read(activeModelProvider.notifier).select(entry.filePath);
       }

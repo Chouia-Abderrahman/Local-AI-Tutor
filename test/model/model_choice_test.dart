@@ -169,6 +169,21 @@ void main() {
     await pumpEventQueue();
     expect(seen.last?.title, 'Downloading Qwen3.5 4B');
     expect(seen.last?.text, startsWith('45% of'));
+    // The notification carries a progress bar.
+    expect(seen.last?.bar, isTrue);
+    expect(seen.last?.percent, 45);
+
+    // Without a length from the server, the catalog's file size stands in,
+    // and the bytes received show.
+    fake.set({
+      'qwen3.5-4b': const DownloadStatus(
+        DownloadPhase.running,
+        receivedBytes: 1291610704,
+      ),
+    });
+    await pumpEventQueue();
+    expect(seen.last?.percent, 50);
+    expect(seen.last?.text, startsWith('50% · '));
 
     fake.set(const {});
     answer.complete();

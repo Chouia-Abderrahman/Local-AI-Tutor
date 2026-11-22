@@ -11,6 +11,7 @@ import '../../core/llm/model_catalog.dart';
 import '../generate/generate_controllers.dart';
 import '../model/model_controllers.dart';
 import 'background_tasks.dart';
+import 'progress_notification.dart';
 
 @pragma('vm:entry-point')
 void keepAliveCallback() =>
@@ -35,17 +36,32 @@ class _KeepAliveHandler extends TaskHandler {
 /// What the app is doing that should go on when the user leaves it.
 @immutable
 class BackgroundActivity {
-  const BackgroundActivity(this.title, this.text);
+  const BackgroundActivity(
+    this.title,
+    this.text, {
+    this.bar = false,
+    this.percent,
+  });
 
   final String title;
   final String text;
 
-  @override
-  bool operator ==(Object other) =>
-      other is BackgroundActivity && other.title == title && other.text == text;
+  /// The notification shows a progress bar.
+  final bool bar;
+
+  /// 0 to 100; with [bar] and no percent, the bar is indeterminate.
+  final int? percent;
 
   @override
-  int get hashCode => Object.hash(title, text);
+  bool operator ==(Object other) =>
+      other is BackgroundActivity &&
+      other.title == title &&
+      other.text == text &&
+      other.bar == bar &&
+      other.percent == percent;
+
+  @override
+  int get hashCode => Object.hash(title, text, bar, percent);
 }
 
 /// The most important work in progress, or null when the app is idle.
@@ -60,14 +76,25 @@ final backgroundActivityProvider = Provider<BackgroundActivity?>((ref) {
   ];
   if (running.isNotEmpty) {
     final (spec, status) = running.first;
-    final fraction = status.fraction;
+    final received = status.receivedBytes;
+    // The server may not send a length; the catalog knows the file's size.
+    final fraction =
+        status.fraction ??
+        (received == null ? null : received / spec.sizeBytes);
+    final percent = fraction == null
+        ? null
+        : (fraction * 100).floor().clamp(0, 100);
     final more = running.length > 1 ? ' · ${running.length - 1} more' : '';
     return BackgroundActivity(
       'Downloading ${spec.name}',
-      fraction == null
+      percent == null
           ? 'Starting…$more'
-          : '${(fraction * 100).floor()}% of ${formatBytes(spec.sizeBytes)}'
-                '$more',
+          : received == null
+          ? '$percent% of ${formatBytes(spec.sizeBytes)}$more'
+          : '$percent% · ${formatBytes(received)} of '
+                '${formatBytes(spec.sizeBytes)}$more',
+      bar: true,
+      percent: percent,
     );
   }
 
@@ -82,6 +109,7 @@ final backgroundActivityProvider = Provider<BackgroundActivity?>((ref) {
     return BackgroundActivity(
       'Loading ${modelDisplayName(model.targetPath!)}',
       'Getting the model ready',
+      bar: true,
     );
   }
 
@@ -92,6 +120,10 @@ final backgroundActivityProvider = Provider<BackgroundActivity?>((ref) {
       runner.total == 0
           ? 'Working…'
           : '${runner.done} of ${runner.total} steps done',
+      bar: true,
+      percent: runner.total == 0
+          ? null
+          : (runner.done * 100 ~/ runner.total).clamp(0, 100),
     );
   }
   return null;
@@ -153,15 +185,25 @@ class KeepAlive {
     }
     if (_running) {
       if (activity == _shown) return;
-      await FlutterForegroundTask.updateService(
-        notificationTitle: activity.title,
-        notificationText: activity.text,
-      );
+      if (!await _show(activity)) {
+        await FlutterForegroundTask.updateService(
+          notificationTitle: activity.title,
+          notificationText: activity.text,
+        );
+      }
       _shown = activity;
     } else {
       await _start(activity);
     }
   }
+
+  /// Posts [activity] on the service's notification with its progress bar.
+  Future<bool> _show(BackgroundActivity activity) => ProgressNotification.show(
+    title: activity.title,
+    text: activity.text,
+    bar: activity.bar,
+    percent: activity.percent,
+  );
 
   Future<void> _start(BackgroundActivity activity) async {
     if (!_initialized) {
@@ -201,7 +243,11 @@ class KeepAlive {
       callback: keepAliveCallback,
     );
     _running = result is ServiceRequestSuccess;
-    if (_running) _shown = activity;
+    if (_running) {
+      _shown = activity;
+      // The plugin's notification has no bar; replace it with one.
+      if (activity.bar) await _show(activity);
+    }
   }
 
   void dispose() {

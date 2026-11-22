@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -28,7 +29,7 @@ class SessionState {
     this.index = 0,
     this.options = const [],
     this.chosen,
-    this.unsure = false,
+    this.previews = const {},
     this.typed = '',
     this.typedCorrect,
     this.revealed = false,
@@ -44,7 +45,9 @@ class SessionState {
   /// Shuffled options of the current multiple-choice question.
   final List<String> options;
   final int? chosen;
-  final bool unsure;
+
+  /// When the current fact would come back after each answer.
+  final Map<fsrs.Rating, Duration> previews;
   final String typed;
   final bool? typedCorrect;
 
@@ -71,7 +74,7 @@ class SessionState {
     int? index,
     List<String>? options,
     int? Function()? chosen,
-    bool? unsure,
+    Map<fsrs.Rating, Duration>? previews,
     String? typed,
     bool? Function()? typedCorrect,
     bool? revealed,
@@ -84,7 +87,7 @@ class SessionState {
     index: index ?? this.index,
     options: options ?? this.options,
     chosen: chosen == null ? this.chosen : chosen(),
-    unsure: unsure ?? this.unsure,
+    previews: previews ?? this.previews,
     typed: typed ?? this.typed,
     typedCorrect: typedCorrect == null ? this.typedCorrect : typedCorrect(),
     revealed: revealed ?? this.revealed,
@@ -96,7 +99,6 @@ class SessionState {
 
 class SessionController extends Notifier<SessionState> {
   final _random = math.Random();
-  final List<int> _responseMs = [];
   DateTime _shownAt = DateTime.now();
 
   @override
@@ -106,7 +108,6 @@ class SessionController extends Notifier<SessionState> {
 
   Future<void> start({int? documentId, int? sectionId}) async {
     state = const SessionState();
-    _responseMs.clear();
     final queue = await _repo.buildSession(
       documentId: documentId,
       sectionId: sectionId,
@@ -137,25 +138,28 @@ class SessionController extends Notifier<SessionState> {
       reviewed: base.reviewed,
       correct: base.correct,
     );
+    unawaited(_loadPreviews(item, index));
   }
 
-  void toggleUnsure() => state = state.copyWith(unsure: !state.unsure);
+  /// Fills in the "back in 4 days" labels of the answer buttons.
+  Future<void> _loadPreviews(StudyItem item, int index) async {
+    final previews = await _repo.previewDelays(item.fact.id);
+    if (!ref.mounted || state.index != index || state.current != item) return;
+    state = state.copyWith(previews: previews);
+  }
 
+  /// Picking an option turns the card over. A wrong pick is "Again" and is
+  /// recorded at once. A right pick waits for the learner to say how sure
+  /// they were: a lucky guess out of four is not the same as knowing it.
   Future<void> choose(int option) async {
     final item = state.current;
     if (item == null || state.phase != SessionPhase.asking) return;
     final ms = _elapsedMs();
     final correct = option == state.correctOption;
     state = state.copyWith(phase: SessionPhase.answered, chosen: () => option);
-    await _record(
-      ratingForChoice(
-        correct: correct,
-        unsure: state.unsure,
-        slow: _isSlow(ms),
-      ),
-      correct: correct,
-      ms: ms,
-    );
+    if (!correct) {
+      await _record(fsrs.Rating.again, correct: false, ms: ms);
+    }
   }
 
   void setTyped(String text) => state = state.copyWith(typed: text);
@@ -184,28 +188,32 @@ class SessionController extends Notifier<SessionState> {
     state = state.copyWith(phase: SessionPhase.answered, revealed: true);
   }
 
+  /// The learner's own grade of a flashcard, a cloze they revealed, or a
+  /// right multiple-choice pick. Records it and moves on to the next card.
   Future<void> rate(fsrs.Rating rating) async {
-    if (state.rated) return;
+    if (state.rated || state.phase != SessionPhase.answered) return;
     await _record(
       rating,
       correct: rating != fsrs.Rating.again,
+      unsure: rating == fsrs.Rating.hard,
       ms: _elapsedMs(),
     );
+    if (ref.mounted) next();
   }
 
   Future<void> _record(
     fsrs.Rating rating, {
     required bool correct,
     required int ms,
+    bool unsure = false,
   }) async {
     final item = state.current!;
-    _responseMs.add(ms);
     final outcome = await _repo.recordReview(
       factId: item.fact.id,
       questionId: item.question.id,
       rating: rating,
       correct: correct,
-      unsure: state.unsure,
+      unsure: unsure,
       responseMs: ms,
     );
     var queue = state.queue;
@@ -259,13 +267,6 @@ class SessionController extends Notifier<SessionState> {
   }
 
   int _elapsedMs() => DateTime.now().difference(_shownAt).inMilliseconds;
-
-  bool _isSlow(int ms) {
-    if (_responseMs.length < 3) return ms > 30000;
-    final sorted = [..._responseMs]..sort();
-    final median = sorted[sorted.length ~/ 2];
-    return ms > math.max(15000, median * 2);
-  }
 }
 
 final sessionControllerProvider =

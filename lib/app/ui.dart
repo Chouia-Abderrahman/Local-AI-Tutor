@@ -123,7 +123,7 @@ class Panel extends StatelessWidget {
   const Panel({
     super.key,
     required this.child,
-    this.padding = const EdgeInsets.all(12),
+    this.padding = const EdgeInsets.all(16),
     this.color,
     this.borderColor,
     this.onTap,
@@ -138,14 +138,30 @@ class Panel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final content = Padding(padding: padding, child: child);
-    return Material(
-      color: color ?? context.scheme.surfaceContainerLowest,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(Tokens.radius),
-        side: BorderSide(color: borderColor ?? context.colors.hairline),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final radius = BorderRadius.circular(20);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: dark
+            ? null
+            : [
+                BoxShadow(
+                  color: context.colors.shadow.withValues(alpha: 0.04),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+              ],
       ),
-      clipBehavior: Clip.antiAlias,
-      child: onTap == null ? content : InkWell(onTap: onTap, child: content),
+      child: Material(
+        color: color ?? context.scheme.surfaceContainerLowest,
+        shape: RoundedRectangleBorder(
+          borderRadius: radius,
+          side: BorderSide(color: borderColor ?? context.colors.hairline),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: onTap == null ? content : InkWell(onTap: onTap, child: content),
+      ),
     );
   }
 }
@@ -253,7 +269,7 @@ class StatRow extends StatelessWidget {
   );
 }
 
-/// A thin progress bar with square ends.
+/// A thin progress bar with rounded ends that eases to each new value.
 class ThinBar extends StatelessWidget {
   const ThinBar({
     super.key,
@@ -271,16 +287,24 @@ class ThinBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SizedBox(
     height: height,
-    child: Stack(
-      fit: StackFit.expand,
-      children: [
-        ColoredBox(color: track ?? context.scheme.surfaceContainerHighest),
-        FractionallySizedBox(
-          alignment: AlignmentDirectional.centerStart,
-          widthFactor: value.clamp(0.0, 1.0),
-          child: ColoredBox(color: color ?? context.colors.accent),
-        ),
-      ],
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(height),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(color: track ?? context.colors.sunken),
+          TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: value.clamp(0.0, 1.0)),
+            duration: const Duration(milliseconds: 420),
+            curve: Curves.easeOutCubic,
+            builder: (context, eased, _) => FractionallySizedBox(
+              alignment: AlignmentDirectional.centerStart,
+              widthFactor: eased,
+              child: ColoredBox(color: color ?? context.colors.accent),
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -300,20 +324,20 @@ class Tag extends StatelessWidget {
     final scheme = context.scheme;
     final colors = context.colors;
     final (Color background, Color foreground) = switch (tone) {
-      TagTone.neutral => (scheme.surfaceContainerHigh, colors.muted),
-      TagTone.accent => (
-        scheme.secondaryContainer,
-        scheme.onSecondaryContainer,
+      TagTone.neutral => (colors.sunken, colors.muted),
+      TagTone.accent => (colors.accentSoft, colors.accent),
+      TagTone.success => (
+        colors.success.withValues(alpha: 0.12),
+        colors.success,
       ),
-      TagTone.success => (scheme.tertiaryContainer, scheme.onTertiaryContainer),
-      TagTone.danger => (scheme.errorContainer, scheme.onErrorContainer),
+      TagTone.danger => (colors.danger.withValues(alpha: 0.12), colors.danger),
       TagTone.solid => (scheme.primary, scheme.onPrimary),
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
         color: background,
-        borderRadius: BorderRadius.circular(Tokens.radiusSmall),
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -365,18 +389,18 @@ class EmptyState extends StatelessWidget {
             const AppMark(size: 48, badge: true)
           else if (icon != null)
             Container(
-              width: 48,
-              height: 48,
+              width: 64,
+              height: 64,
               decoration: BoxDecoration(
-                color: context.scheme.surfaceContainerHigh,
-                borderRadius: BorderRadius.circular(Tokens.radius),
+                color: context.colors.accentSoft,
+                shape: BoxShape.circle,
               ),
-              child: Icon(icon, color: context.colors.muted),
+              child: Icon(icon, color: context.colors.accent),
             ),
           const SizedBox(height: 16),
           Text(
             title,
-            style: context.text.titleMedium,
+            style: context.text.headlineSmall,
             textAlign: TextAlign.center,
           ),
           if (body != null) ...[
@@ -417,14 +441,14 @@ class ModelChip extends StatelessWidget {
   Widget build(BuildContext context) => Material(
     color: context.scheme.surfaceContainerLowest,
     shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(Tokens.radius),
-      side: BorderSide(color: context.scheme.outline),
+      borderRadius: BorderRadius.circular(999),
+      side: BorderSide(color: context.colors.hairline),
     ),
     clipBehavior: Clip.antiAlias,
     child: InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 5, 6, 5),
+        padding: const EdgeInsets.fromLTRB(10, 6, 8, 6),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -519,7 +543,7 @@ class PanelRow extends StatelessWidget {
   }
 }
 
-/// A square glyph for a file type: PDF, TXT, MD.
+/// A glyph for a file type: PDF, TXT, MD.
 class FileGlyph extends StatelessWidget {
   const FileGlyph({super.key, required this.label, this.failed = false});
 
@@ -533,16 +557,8 @@ class FileGlyph extends StatelessWidget {
     alignment: Alignment.bottomCenter,
     padding: const EdgeInsets.only(bottom: 5),
     decoration: BoxDecoration(
-      color: failed
-          ? context.scheme.errorContainer
-          : context.scheme.surfaceContainerHigh,
-      borderRadius: BorderRadius.circular(Tokens.radiusSmall),
-      border: Border(
-        top: BorderSide(
-          color: failed ? context.scheme.error : context.colors.accent,
-          width: 3,
-        ),
-      ),
+      color: failed ? context.scheme.errorContainer : context.colors.accentSoft,
+      borderRadius: BorderRadius.circular(10),
     ),
     child: Text(
       label,
@@ -580,7 +596,7 @@ class SheetHeader extends StatelessWidget {
 String plural(int n, String one, [String? many]) =>
     '$n ${n == 1 ? one : (many ?? '${one}s')}';
 
-/// An on/off switch with nearly square corners, to match the rest of the UI.
+/// An on/off switch, to match the rest of the UI.
 class SharpSwitch extends StatelessWidget {
   const SharpSwitch({super.key, required this.value, this.onChanged});
 
@@ -599,27 +615,98 @@ class SharpSwitch extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOut,
-          width: 38,
-          height: 22,
+          width: 44,
+          height: 26,
           padding: const EdgeInsets.all(3),
           decoration: BoxDecoration(
-            color: value ? scheme.primary : scheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(3),
-            border: Border.all(color: value ? scheme.primary : scheme.outline),
+            color: value ? scheme.primary : context.colors.sunken,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: value ? scheme.primary : context.colors.hairline,
+            ),
           ),
           alignment: value ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
-            width: 14,
-            height: 14,
+            width: 18,
+            height: 18,
             decoration: BoxDecoration(
               color: value
                   ? scheme.onPrimary
                   : (enabled ? scheme.onSurfaceVariant : scheme.outline),
-              borderRadius: BorderRadius.circular(Tokens.radiusSmall),
+              shape: BoxShape.circle,
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// A rounded badge with an optional icon: a verdict, a count.
+class Pill extends StatelessWidget {
+  const Pill({
+    super.key,
+    required this.label,
+    this.color,
+    this.background,
+    this.icon,
+    this.dense = false,
+  });
+
+  final String label;
+  final Color? color;
+  final Color? background;
+  final IconData? icon;
+  final bool dense;
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground = color ?? context.colors.muted;
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: dense ? 8 : 10,
+        vertical: dense ? 3 : 5,
+      ),
+      decoration: BoxDecoration(
+        color: background ?? foreground.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: dense ? 11 : 13, color: foreground),
+            const SizedBox(width: 4),
+          ],
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  (dense ? context.text.labelSmall : context.text.labelMedium)
+                      ?.copyWith(
+                        color: foreground,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0,
+                      ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "in 10 min", "in 4 days": how long until a card comes back.
+String formatDelay(Duration delay) {
+  final minutes = delay.inMinutes;
+  if (minutes < 1) return 'in <1 min';
+  if (minutes < 60) return 'in $minutes min';
+  final hours = delay.inHours;
+  if (hours < 24) return 'in ${plural(hours, 'hour')}';
+  final days = delay.inDays;
+  if (days < 30) return 'in ${plural(days, 'day')}';
+  if (days < 365) return 'in ${plural((days / 30).round(), 'month')}';
+  return 'in ${plural((days / 365).round(), 'year')}';
 }

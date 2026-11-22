@@ -13,7 +13,7 @@ enum Quality {
   final String label;
 
   String get summary => switch (this) {
-    Quality.quick => 'Cloze cards and flashcards from verified facts.',
+    Quality.quick => 'Cloze cards and flashcards only; no multiple choice.',
     Quality.standard => 'Adds multiple choice, checked by answering it blind.',
     Quality.thorough => 'Adds a critique that rewrites weak questions.',
     Quality.deep => 'More candidates and a second blind check.',

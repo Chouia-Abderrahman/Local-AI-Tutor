@@ -43,8 +43,24 @@ class LlmParams {
 }
 
 /// Model settings fixed at load time.
+/// Where llama.cpp runs a model. On Adreno phones Vulkan can be slower than
+/// the CPU; OpenCL is the backend Qualcomm tunes for Adreno (Q4_0 weights).
+enum LlmBackend {
+  cpu('CPU'),
+  opencl('GPU (OpenCL)'),
+  vulkan('GPU (Vulkan)');
+
+  const LlmBackend(this.label);
+  final String label;
+}
+
 class LlmLoadOptions {
-  const LlmLoadOptions({this.contextSize = 4096});
+  const LlmLoadOptions({
+    this.contextSize = 4096,
+    this.backend = LlmBackend.cpu,
+  });
+
+  final LlmBackend backend;
 
   /// Maximum prompt plus reply length, in tokens. Memory grows with it.
   final int contextSize;

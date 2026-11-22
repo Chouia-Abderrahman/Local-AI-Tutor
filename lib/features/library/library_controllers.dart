@@ -11,6 +11,7 @@ import '../../app/providers.dart';
 import '../../core/db/database.dart';
 import '../../core/db/library_repository.dart';
 import '../../core/ingest/importer.dart';
+import '../../app/pdf_support.dart';
 import '../../core/ingest/ocr.dart';
 import '../../core/ingest/pdf_extractor.dart';
 import '../model/model_controllers.dart';
@@ -47,6 +48,7 @@ final importerProvider = FutureProvider<DocumentImporter>((ref) async {
     db: ref.watch(databaseProvider),
     storageDir: Directory(p.join(support.path, 'documents')),
     extractPdf: (path, {required title, onProgress}) async {
+      await ensurePdfSupport();
       // Text recognition for scanned pages (ML Kit runs on Android/iOS).
       final ocr = Platform.isAndroid || Platform.isIOS
           ? MlKitPageOcr(tempDir: temp)

@@ -8,6 +8,14 @@ import '../../core/db/database.dart';
 import '../library/library_controllers.dart';
 import 'study_controllers.dart';
 
+String _greeting(DateTime now) {
+  final hour = now.hour;
+  if (hour < 5) return 'Still up';
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
 /// What is due today, overall and per document.
 class StudyScreen extends ConsumerWidget {
   const StudyScreen({super.key});
@@ -18,85 +26,156 @@ class StudyScreen extends ConsumerWidget {
     final documents = (ref.watch(documentsProvider).value ?? const [])
         .where((d) => d.status == 'ready')
         .toList();
+    final colors = context.colors;
     return Scaffold(
-      appBar: AppBar(title: const Text('Study')),
-      body: RefreshIndicator(
-        onRefresh: () async => ref.invalidate(studyOverviewProvider),
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            Tokens.gutter,
-            4,
-            Tokens.gutter,
-            32,
-          ),
-          children: [
-            switch (overview) {
-              AsyncData(:final value) => Panel(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('Today', style: context.text.titleSmall),
-                    const SizedBox(height: 12),
-                    StatRow(
-                      stats: [
-                        Stat(
-                          value: '${value.due}',
-                          label: 'Due',
-                          highlight: value.due > 0,
-                        ),
-                        Stat(value: '${value.newAvailable}', label: 'New'),
-                        Stat(
-                          value: '${value.reviewedToday}',
-                          label: 'Done today',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    FilledButton.icon(
-                      onPressed: value.due + value.newAvailable == 0
-                          ? null
-                          : () => context.go('/study/session'),
-                      icon: const Icon(Icons.play_arrow, size: 20),
-                      label: const Text('Study everything'),
-                    ),
-                    if (value.due + value.newAvailable == 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: Text(
-                          value.reviewedToday > 0
-                              ? 'All caught up. Reviews come back when they '
-                                    'are due.'
-                              : 'Generate questions for a document in the '
-                                    'Library first.',
-                          style: context.text.bodySmall,
-                        ),
+      body: SafeArea(
+        bottom: false,
+        child: RefreshIndicator(
+          onRefresh: () async => ref.invalidate(studyOverviewProvider),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(
+              Tokens.gutter,
+              14,
+              Tokens.gutter,
+              32,
+            ),
+            children: [
+              Text(_greeting(DateTime.now()), style: context.text.displaySmall),
+              const SizedBox(height: 4),
+              Text(switch (overview) {
+                AsyncData(:final value)
+                    when value.due + value.newAvailable > 0 =>
+                  '${plural(value.due + value.newAvailable, 'card')} '
+                      'waiting for you',
+                AsyncData() => 'Nothing waiting right now',
+                _ => ' ',
+              }, style: context.text.bodyMedium),
+              const SizedBox(height: 20),
+              switch (overview) {
+                AsyncData(:final value) => Panel(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          _Ring(
+                            done: value.reviewedToday,
+                            waiting: value.due + value.newAvailable,
+                          ),
+                          const SizedBox(width: 20),
+                          Expanded(
+                            child: StatRow(
+                              stats: [
+                                Stat(
+                                  value: '${value.due}',
+                                  label: 'Due',
+                                  highlight: value.due > 0,
+                                ),
+                                Stat(
+                                  value: '${value.newAvailable}',
+                                  label: 'New',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                  ],
+                      const SizedBox(height: 18),
+                      FilledButton.icon(
+                        onPressed: value.due + value.newAvailable == 0
+                            ? null
+                            : () => context.go('/study/session'),
+                        icon: const Icon(Icons.play_arrow_rounded, size: 22),
+                        label: const Text('Study everything'),
+                      ),
+                      if (value.due + value.newAvailable == 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(
+                            value.reviewedToday > 0
+                                ? 'All caught up. Reviews come back when '
+                                      'they are due.'
+                                : 'Generate questions for a document in the '
+                                      'Library first.',
+                            style: context.text.bodySmall,
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              AsyncError(:final error) => Text('$error'),
-              _ => const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-            },
-            if (documents.isNotEmpty) ...[
-              const SectionLabel('By document'),
-              PanelList(
-                children: [
-                  for (final doc in documents) _DocumentStudyRow(doc: doc),
+                AsyncError(:final error) => Text('$error'),
+                _ => const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              },
+              if (documents.isNotEmpty) ...[
+                const SectionLabel('By document'),
+                for (final doc in documents) ...[
+                  _DocumentStudyTile(doc: doc),
+                  const SizedBox(height: 12),
                 ],
+              ],
+              SizedBox(height: documents.isEmpty ? 0 : 4),
+              Text(
+                'Questions lean on multiple choice; a card turns over when '
+                'you answer, and shows where in the text it comes from.',
+                textAlign: TextAlign.center,
+                style: context.text.bodySmall?.copyWith(color: colors.faint),
               ),
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _DocumentStudyRow extends ConsumerWidget {
-  const _DocumentStudyRow({required this.doc});
+/// Today's progress as a ring: answered of answered plus still waiting.
+class _Ring extends StatelessWidget {
+  const _Ring({required this.done, required this.waiting});
+
+  final int done;
+  final int waiting;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = done + waiting;
+    final progress = total == 0 ? 1.0 : done / total;
+    return SizedBox.square(
+      dimension: 76,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          SizedBox.expand(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(end: progress),
+              duration: const Duration(milliseconds: 600),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, _) => CircularProgressIndicator(
+                value: value,
+                strokeWidth: 6,
+                strokeCap: StrokeCap.round,
+                backgroundColor: context.colors.sunken,
+              ),
+            ),
+          ),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('$done', style: context.text.headlineMedium),
+              Text('TODAY', style: context.text.labelSmall),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DocumentStudyTile extends ConsumerWidget {
+  const _DocumentStudyTile({required this.doc});
 
   final StudyDocument doc;
 
@@ -106,19 +185,65 @@ class _DocumentStudyRow extends ConsumerWidget {
     final available = overview == null
         ? 0
         : overview.due + overview.newAvailable;
-    return PanelRow(
-      title: Text(doc.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        overview == null
-            ? ''
-            : '${overview.due} due · ${overview.newAvailable} new',
-      ),
-      trailing: available == 0
-          ? Icon(Icons.check, size: 18, color: context.colors.success)
-          : OutlinedButton(
-              onPressed: () => context.go('/study/session?doc=${doc.id}'),
-              child: const Text('Study'),
+    final colors = context.colors;
+    return Panel(
+      onTap: available == 0
+          ? null
+          : () => context.go('/study/session?doc=${doc.id}'),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: colors.accentSoft,
+              borderRadius: BorderRadius.circular(14),
             ),
+            child: Icon(Icons.style_outlined, color: colors.accent, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  doc.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.text.titleMedium,
+                ),
+                const SizedBox(height: 6),
+                if (overview != null)
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      if (overview.due > 0)
+                        Pill(
+                          label: '${overview.due} due',
+                          dense: true,
+                          color: colors.accent,
+                        ),
+                      if (overview.newAvailable > 0)
+                        Pill(
+                          label: '${overview.newAvailable} new',
+                          dense: true,
+                          color: colors.success,
+                        ),
+                      if (available == 0)
+                        Pill(label: 'All caught up', dense: true),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+          if (available > 0)
+            Icon(
+              Icons.play_circle_fill_rounded,
+              color: colors.accent,
+              size: 34,
+            ),
+        ],
+      ),
     );
   }
 }

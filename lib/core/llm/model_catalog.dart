@@ -11,7 +11,12 @@ class ModelSpec {
     required this.sizeBytes,
     required this.minRamBytes,
     required this.summary,
+    this.legacySources = const [],
   });
+
+  /// Earlier files of this model the app may have downloaded (Q4_K_M, before
+  /// the switch to Q4_0); still recognized as this model.
+  final List<String> legacySources;
 
   final String id;
   final String name;
@@ -29,29 +34,34 @@ class ModelSpec {
 }
 
 /// Ordered from largest to smallest. All are Qwen3.5 instruct models
-/// (Apache-2.0), quantized to Q4_K_M by unsloth.
+/// (Apache-2.0), quantized to Q4_0 by unsloth: llama.cpp repacks Q4_0 into
+/// faster ARM CPU kernels, and its Adreno OpenCL backend is tuned for it.
+/// Q4_K_M, used before, is often slower on phones.
 const List<ModelSpec> modelCatalog = [
   ModelSpec(
     id: 'qwen3.5-4b',
     name: 'Qwen3.5 4B',
-    source: 'hf://unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf',
-    sizeBytes: 2741000000,
+    source: 'hf://unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_0.gguf',
+    legacySources: ['hf://unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf'],
+    sizeBytes: 2583221408,
     minRamBytes: 6 * _gib + _gib ~/ 2,
     summary: 'Best questions. For phones with 8 GB of RAM or more.',
   ),
   ModelSpec(
     id: 'qwen3.5-2b',
     name: 'Qwen3.5 2B',
-    source: 'hf://unsloth/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf',
-    sizeBytes: 1281000000,
+    source: 'hf://unsloth/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_0.gguf',
+    legacySources: ['hf://unsloth/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf'],
+    sizeBytes: 1214873856,
     minRamBytes: 4 * _gib + _gib ~/ 2,
     summary: 'Good balance. For phones with 6 GB of RAM.',
   ),
   ModelSpec(
     id: 'qwen3.5-0.8b',
     name: 'Qwen3.5 0.8B',
-    source: 'hf://unsloth/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q4_K_M.gguf',
-    sizeBytes: 533000000,
+    source: 'hf://unsloth/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q4_0.gguf',
+    legacySources: ['hf://unsloth/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q4_K_M.gguf'],
+    sizeBytes: 507154688,
     minRamBytes: 0,
     summary: 'Fastest but weakest. For testing and phones with little RAM.',
   ),

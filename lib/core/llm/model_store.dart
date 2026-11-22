@@ -40,15 +40,23 @@ class ModelStore {
   final List<Directory> sideloadDirectories;
 
   /// Path of the downloaded file for [spec], or null if it isn't on the device.
+  /// The current file first, then an earlier one (see
+  /// [ModelSpec.legacySources]).
   Future<String?> downloadedPath(ModelSpec spec) async {
-    final entry = await manager.get(ModelSource.parse(spec.source).cacheKey);
-    if (entry == null || !File(entry.filePath).existsSync()) return null;
-    return entry.filePath;
+    for (final source in [spec.source, ...spec.legacySources]) {
+      final entry = await manager.get(ModelSource.parse(source).cacheKey);
+      if (entry != null && File(entry.filePath).existsSync()) {
+        return entry.filePath;
+      }
+    }
+    return null;
   }
 
   Future<void> delete(ModelSpec spec) async {
-    final key = ModelSource.parse(spec.source).cacheKey;
-    if (await manager.get(key) != null) await manager.remove(key);
+    for (final source in [spec.source, ...spec.legacySources]) {
+      final key = ModelSource.parse(source).cacheKey;
+      if (await manager.get(key) != null) await manager.remove(key);
+    }
   }
 
   /// `.gguf` files copied onto the device by hand.

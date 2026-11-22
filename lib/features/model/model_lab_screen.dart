@@ -5,6 +5,7 @@ import '../../app/providers.dart';
 import '../../app/theme.dart';
 import '../../app/ui.dart';
 import '../../core/llm/installed_model.dart';
+import '../../core/llm/llm_engine.dart';
 import '../../core/llm/model_catalog.dart';
 import '../../core/llm/model_checks.dart';
 import 'model_controllers.dart';
@@ -136,6 +137,8 @@ class _ModelLabScreenState extends ConsumerState<ModelLabScreen> {
               ],
             ),
           ],
+          const SectionLabel('Runs on'),
+          const _BackendPanel(),
           const SectionLabel('Test a model'),
           _TestsPanel(
             installed: installed,
@@ -579,6 +582,75 @@ class _QuestionView extends StatelessWidget {
               ),
             ),
       ],
+    );
+  }
+}
+
+/// Where models run: CPU, or the GPU through OpenCL or Vulkan.
+class _BackendPanel extends ConsumerStatefulWidget {
+  const _BackendPanel();
+
+  @override
+  ConsumerState<_BackendPanel> createState() => _BackendPanelState();
+}
+
+class _BackendPanelState extends ConsumerState<_BackendPanel> {
+  bool _switching = false;
+
+  @override
+  Widget build(BuildContext context) {
+    ref.watch(activeModelProvider);
+    final models = ref.read(activeModelProvider.notifier);
+    return Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SegmentedButton<LlmBackend>(
+            segments: [
+              for (final b in LlmBackend.values)
+                ButtonSegment(
+                  value: b,
+                  label: Text(switch (b) {
+                    LlmBackend.cpu => 'CPU',
+                    LlmBackend.opencl => 'OpenCL',
+                    LlmBackend.vulkan => 'Vulkan',
+                  }),
+                ),
+            ],
+            selected: {models.backend},
+            showSelectedIcon: false,
+            onSelectionChanged: _switching
+                ? null
+                : (s) async {
+                    setState(() => _switching = true);
+                    try {
+                      await models.setBackend(s.single);
+                    } finally {
+                      if (mounted) setState(() => _switching = false);
+                    }
+                  },
+          ),
+          const SizedBox(height: 8),
+          if (models.backendNotice != null && !_switching) ...[
+            Text(
+              models.backendNotice!,
+              style: context.text.bodySmall?.copyWith(
+                color: context.colors.danger,
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
+          Text(
+            _switching
+                ? 'Reloading the model…'
+                : 'CPU is the safe default. On Snapdragon phones try OpenCL, '
+                      'and run the speed test after each switch; Vulkan can be '
+                      'slower than the CPU on Adreno GPUs. A GPU the phone '
+                      "can't use falls back to the CPU.",
+            style: context.text.bodySmall,
+          ),
+        ],
+      ),
     );
   }
 }

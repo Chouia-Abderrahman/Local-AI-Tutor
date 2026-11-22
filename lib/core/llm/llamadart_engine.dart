@@ -39,7 +39,17 @@ class LlamadartEngine implements LlmEngine {
       try {
         await _engine.setModel(
           LlamaModel(ModelSource.path(modelPath)),
-          params: ModelParams(contextSize: options.contextSize),
+          params: ModelParams(
+            contextSize: options.contextSize,
+            // CPU: no GPU layers. GPU: every layer on the chosen backend;
+            // llamadart falls back to the CPU if that GPU can't run it.
+            preferredBackend: switch (options.backend) {
+              LlmBackend.cpu => GpuBackend.cpu,
+              LlmBackend.opencl => GpuBackend.opencl,
+              LlmBackend.vulkan => GpuBackend.vulkan,
+            },
+            gpuLayers: options.backend == LlmBackend.cpu ? 0 : -1,
+          ),
         );
       } on LlamaException catch (error) {
         throw LlmException(

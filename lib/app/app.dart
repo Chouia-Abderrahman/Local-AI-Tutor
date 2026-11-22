@@ -8,7 +8,7 @@ class StudyApp extends ConsumerWidget {
   const StudyApp({super.key});
 
   static const name = 'Local AI Tutor';
-  static const version = '0.8.0';
+  static const version = '0.9.0';
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

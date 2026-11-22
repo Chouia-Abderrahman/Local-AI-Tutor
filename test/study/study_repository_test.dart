@@ -208,7 +208,7 @@ void main() {
       expect(typedAnswerMatches('hypertonic', 'hypotonic'), isFalse);
     });
 
-    test('new facts get MCQ; stable facts get recall formats', () {
+    test('multiple choice leads; recall fills in behind it', () {
       Question q(int id, String type) => Question(
         id: id,
         factId: 1,
@@ -227,10 +227,27 @@ void main() {
         StudyRepository.chooseQuestion(qs, reviewed: false, stable: false).type,
         'mcq',
       );
+      // Multiple choice leads, for reviews too.
+      expect(
+        StudyRepository.chooseQuestion(qs, reviewed: true, stable: false).type,
+        'mcq',
+      );
       expect(
         StudyRepository.chooseQuestion(qs, reviewed: true, stable: true).type,
+        'mcq',
+      );
+      // A well-known fact asked as multiple choice last time is asked as
+      // recall now.
+      expect(
+        StudyRepository.chooseQuestion(
+          qs,
+          reviewed: true,
+          stable: true,
+          lastQuestionId: 2,
+        ).type,
         'cloze',
       );
+      // Otherwise the wording just asked is avoided.
       expect(
         StudyRepository.chooseQuestion(
           qs,
@@ -238,7 +255,28 @@ void main() {
           stable: true,
           lastQuestionId: 1,
         ).type,
-        'flashcard',
+        'mcq',
+      );
+      // A lone multiple choice from an earlier session is asked again...
+      expect(
+        StudyRepository.chooseQuestion(
+          qs,
+          reviewed: true,
+          stable: false,
+          lastQuestionId: 2,
+          allowRepeat: true,
+        ).type,
+        'mcq',
+      );
+      // ...but not one that was just missed.
+      expect(
+        StudyRepository.chooseQuestion(
+          qs,
+          reviewed: true,
+          stable: false,
+          lastQuestionId: 2,
+        ).type,
+        'cloze',
       );
     });
   });

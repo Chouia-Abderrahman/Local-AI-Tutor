@@ -33,6 +33,10 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- The vendor OpenCL library, for llama.cpp's GPU backend on Adreno.
+             Optional: phones without it run models on the CPU. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
         <!-- Small icon of the background-work notification. -->
         <meta-data
             android:name="local_ai_tutor.NOTIFICATION_ICON"

@@ -130,7 +130,9 @@ class _GenerateSheetState extends ConsumerState<_GenerateSheet> {
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
                     _quality == Quality.quick
-                        ? 'Apply needs Standard; Analyze needs Thorough.'
+                        ? 'Quick has no multiple choice, which sessions lean '
+                              'on; Standard and up add it. Apply needs '
+                              'Standard; Analyze needs Thorough.'
                         : 'Analyze needs Thorough.',
                     style: context.text.bodySmall,
                   ),

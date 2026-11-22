@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.8.0+8
+version: 0.9.0+9
 
 environment:
   sdk: ^3.12.2
@@ -72,22 +72,19 @@ flutter:
   uses-material-design: true
 
   assets:
-    # Source Sans 3 is under the SIL Open Font License; the app shows it on
-    # its licenses page.
-    - assets/fonts/SourceSans3-LICENSE.md
+    # Inter and Fraunces are under the SIL Open Font License; the app shows
+    # the licenses on its licenses page.
+    - assets/fonts/OFL-Inter.txt
+    - assets/fonts/OFL-Fraunces.txt
 
   fonts:
-    - family: SourceSans3
+    # Variable fonts: Flutter maps FontWeight onto the `wght` axis.
+    - family: Inter
       fonts:
-        - asset: assets/fonts/SourceSans3-Regular.otf
-        - asset: assets/fonts/SourceSans3-It.otf
-          style: italic
-        - asset: assets/fonts/SourceSans3-Medium.otf
-          weight: 500
-        - asset: assets/fonts/SourceSans3-Semibold.otf
-          weight: 600
-        - asset: assets/fonts/SourceSans3-Bold.otf
-          weight: 700
+        - asset: assets/fonts/Inter-Variable.ttf
+    - family: Fraunces
+      fonts:
+        - asset: assets/fonts/Fraunces-Variable.ttf
 
 # Ship only the llama.cpp runtime (GGUF models); skip LiteRT-LM to keep the
 # APK small.
@@ -95,3 +92,8 @@ hooks:
   user_defines:
     llamadart:
       llamadart_native_runtimes: [llama_cpp]
+      # Phones get the CPU module, Vulkan and OpenCL (Qualcomm's tuned
+      # backend for Adreno GPUs); Settings → AI models picks one.
+      llamadart_native_backends:
+        platforms:
+          android-arm64: [cpu, vulkan, opencl]

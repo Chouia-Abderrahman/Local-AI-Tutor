@@ -39,7 +39,10 @@ class InstalledModel {
 /// The catalog entry for a file name, if any.
 ModelSpec? catalogSpecForFile(String fileName) {
   for (final spec in modelCatalog) {
-    if (spec.fileName == fileName) return spec;
+    if (spec.fileName == fileName ||
+        spec.legacySources.any((s) => s.split('/').last == fileName)) {
+      return spec;
+    }
   }
   return null;
 }

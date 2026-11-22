@@ -45,6 +45,13 @@ final runnerStateProvider = StreamProvider<RunnerState>((ref) {
 /// Resumes generation left unfinished by an earlier run of the app. Watched
 /// once by the home shell.
 final generationBootstrapProvider = FutureProvider<void>((ref) async {
+  // Let the first screens appear before work starts that loads a model of
+  // gigabytes: opening the app must never wait on it.
+  final delay = Completer<void>();
+  final timer = Timer(const Duration(seconds: 3), delay.complete);
+  ref.onDispose(timer.cancel);
+  await delay.future;
+  if (!ref.mounted) return;
   await ref.read(generationRunnerProvider).resumePending();
 });
 

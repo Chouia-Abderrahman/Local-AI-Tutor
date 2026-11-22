@@ -214,6 +214,11 @@ class StudyRepository {
       reviewed: card != null,
       stable: (card?.stability ?? 0) >= 7,
       lastQuestionId: lastAsked,
+      // A fact that is settled in review may be asked the same multiple
+      // choice again (options shuffled); one just missed, or asked a moment
+      // ago, is asked differently.
+      allowRepeat:
+          avoidQuestionId == null && card?.state == fsrs.State.review.name,
     );
     final chunk = await (db.select(
       db.chunks,
@@ -227,26 +232,65 @@ class StudyRepository {
     );
   }
 
-  /// New facts start with multiple choice when there is one (recognition
-  /// first); well-known facts get recall (cloze, flashcard). The question
-  /// asked last time is avoided so the wording isn't memorized.
+  /// Multiple choice leads: it is what most facts are asked as, new or
+  /// reviewed. Recall questions (typed cloze, then flashcard) fill in behind
+  /// it, and a fact that is well known (stable) alternates: after a multiple
+  /// choice it is asked as recall, which tests more than recognizing the
+  /// answer. The question asked last time is avoided so the wording isn't
+  /// memorized, except that a lone multiple choice is asked again, with its
+  /// options shuffled, when [allowRepeat] says the last ask was long ago.
   static Question chooseQuestion(
     List<Question> questions, {
     required bool reviewed,
     required bool stable,
     int? lastQuestionId,
+    bool allowRepeat = false,
   }) {
     List<Question> ofType(String type) =>
         questions.where((q) => q.type == type).toList();
+    final lastType = lastQuestionId == null
+        ? null
+        : questions.where((q) => q.id == lastQuestionId).firstOrNull?.type;
     final order = !reviewed
         ? ['mcq', 'flashcard', 'cloze']
-        : stable
+        : stable && lastType == 'mcq'
         ? ['cloze', 'flashcard', 'mcq']
-        : ['flashcard', 'mcq', 'cloze'];
-    final candidates = [
-      for (final type in order) ...ofType(type),
-    ].where((q) => q.id != lastQuestionId).toList();
-    return candidates.isNotEmpty ? candidates.first : questions.first;
+        : ['mcq', 'cloze', 'flashcard'];
+    for (final type in order) {
+      final all = ofType(type);
+      final fresh = all.where((q) => q.id != lastQuestionId).toList();
+      if (fresh.isNotEmpty) return fresh.first;
+      if (allowRepeat && type == 'mcq' && !stable && all.isNotEmpty) {
+        return all.first;
+      }
+    }
+    return questions.first;
+  }
+
+  /// When a fact would come back after each answer, for the labels on the
+  /// answer buttons.
+  Future<Map<fsrs.Rating, Duration>> previewDelays(int factId) async {
+    final now = _now;
+    final existing = await (db.select(
+      db.factCards,
+    )..where((c) => c.factId.equals(factId))).getSingleOrNull();
+    final card = existing == null
+        ? fsrs.Card(cardId: factId, due: now)
+        : fsrs.Card.fromMap(
+            Map<String, dynamic>.from(jsonDecode(existing.fsrsJson) as Map),
+          );
+    return {
+      for (final rating in [
+        fsrs.Rating.again,
+        fsrs.Rating.hard,
+        fsrs.Rating.good,
+      ])
+        rating: scheduler
+            .reviewCard(card, rating, reviewDateTime: now)
+            .card
+            .due
+            .difference(now),
+    };
   }
 
   Future<ReviewOutcome> recordReview({
