@@ -4,13 +4,18 @@ import 'package:flutter/material.dart';
 
 /// A card that flips around its vertical axis.
 ///
-/// The flip is *finger-tracked*: a horizontal drag rotates the card in real time
-/// and, on release, either completes the turn or springs back depending on how
-/// far and how fast it was thrown. That direct manipulation is what makes the
-/// gesture feel physical rather than like a button that plays an animation.
+/// The flip is *finger-tracked*: a horizontal drag rotates the card in real
+/// time and, on release, either completes the turn or springs back depending
+/// on how far and how fast it was thrown.
 ///
-/// [isFlipped] is owned by the parent so the study screen stays the source of
-/// truth for whether the answer is showing; the widget animates towards it.
+/// The card turns the way the finger goes: the edge nearest you follows the
+/// finger, so a swipe to the right turns it as if you pushed it to the right,
+/// whichever face is showing. (An earlier version fixed the spin by the first
+/// movement of the drag, so a swipe turned the card one way from its front and
+/// the other way from its back.)
+///
+/// [isFlipped] is owned by the parent, so the study screen stays the source
+/// of truth for whether the answer is showing; the widget animates towards it.
 class FlipCard extends StatefulWidget {
   const FlipCard({
     super.key,
@@ -29,8 +34,8 @@ class FlipCard extends StatefulWidget {
   /// True when the answer side should be showing.
   final bool isFlipped;
 
-  /// Called when a gesture asks for the opposite side. The parent is expected to
-  /// toggle [isFlipped].
+  /// Called when a gesture asks for the opposite side. The parent is expected
+  /// to toggle [isFlipped].
   final VoidCallback onFlip;
 
   final bool tapToFlip;
@@ -47,97 +52,116 @@ class FlipCard extends StatefulWidget {
 
 class _FlipCardState extends State<FlipCard>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
+  /// The card's turn in half-turns: 0 is the front, 1 the back, 2 the front
+  /// again. It is not wrapped, so a drag one way and a drag the other way
+  /// turn the card visibly different ways instead of snapping through zero.
+  late final AnimationController _turn = AnimationController.unbounded(
     vsync: this,
-    duration: widget.duration,
     value: widget.isFlipped ? 1 : 0,
   );
 
-  /// Which way round the card is turning: +1 for a rightward drag, -1 leftward.
-  /// Only affects the visual direction of the spin, not which face wins.
-  double _sign = 1;
+  /// The whole number of half-turns the card is heading for or resting at.
+  late double _target;
 
-  /// Controller value when the current drag began.
-  double _dragStartValue = 0;
-
-  /// Horizontal distance travelled so far in the current drag.
+  double _dragStart = 0;
   double _dragOffset = 0;
-
   bool _isDragging = false;
 
   /// Fraction of the card's width that amounts to a full half-turn. Less than
   /// one so the flip completes comfortably inside a thumb's reach.
   static const double _dragTravel = 0.55;
 
+  static int _side(double halfTurns) => halfTurns.round() % 2;
+
+  int get _wantedSide => widget.isFlipped ? 1 : 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Not a field initializer: a `late` one would be read for the first time
+    // after the parent has already changed `isFlipped`.
+    _target = widget.isFlipped ? 1 : 0;
+    _turn.addStatusListener((status) {
+      // The parent may not have toggled after asking to (it can refuse):
+      // end up on the side it says.
+      if (status == AnimationStatus.completed && !_isDragging) _reconcile();
+    });
+  }
+
   @override
   void didUpdateWidget(FlipCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.isFlipped != widget.isFlipped && !_isDragging) {
-      _animateTo(widget.isFlipped ? 1 : 0);
-    }
+    if (!_isDragging) _reconcile();
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _turn.dispose();
     super.dispose();
   }
 
+  /// Turns the card to the side the parent asks for, if it is not already
+  /// heading there. It goes back towards the front-and-back range rather than
+  /// piling on more turns.
+  void _reconcile() {
+    if (_side(_target) == _wantedSide) return;
+    final base = _turn.value.round();
+    final target = _side(base.toDouble()) == _wantedSide
+        ? base
+        : (base > 0 ? base - 1 : base + 1);
+    _animateTo(target.toDouble());
+  }
+
   void _animateTo(double target) {
-    _controller.animateTo(
+    _target = target;
+    _turn.animateTo(
       target,
       duration: widget.duration,
-      // Gentle overshoot on the way in, plain ease on the way back — a spring
-      // that settles rather than bounces.
       curve: Curves.easeOutCubic,
     );
   }
 
   void _onDragStart(DragStartDetails details) {
     _isDragging = true;
-    _dragStartValue = _controller.value;
+    _dragStart = _turn.value;
     _dragOffset = 0;
-    _controller.stop();
+    _turn.stop();
   }
 
   void _onDragUpdate(DragUpdateDetails details, double width) {
     if (width <= 0) return;
-
-    final delta = details.primaryDelta ?? 0;
-
-    // The first meaningful movement picks which way the card appears to spin.
-    if (_dragOffset == 0 && delta != 0) {
-      _sign = delta < 0 ? -1 : 1;
-    }
-
-    _dragOffset += delta;
-
-    // Progress is measured along the direction the drag committed to, so
-    // pulling back part-way through unwinds the flip instead of fighting it.
-    // Either direction reveals: the card always turns towards its other face.
-    final travelled = (_dragOffset * _sign) / (width * _dragTravel);
-    final towards = widget.isFlipped ? -1 : 1;
-
-    _controller.value = (_dragStartValue + travelled * towards).clamp(0.0, 1.0);
+    _dragOffset += details.primaryDelta ?? 0;
+    // Dragging right turns the card so its near edge goes right, which is a
+    // decreasing angle (the near edge of a positive turn moves left). At most
+    // one half-turn either way from where the drag began.
+    final travelled = -_dragOffset / (width * _dragTravel);
+    _turn.value = (_dragStart + travelled).clamp(
+      _dragStart - 1,
+      _dragStart + 1,
+    );
   }
 
-  void _onDragEnd(DragEndDetails details) {
+  void _onDragEnd(DragEndDetails details, double width) {
     _isDragging = false;
 
-    final value = _controller.value;
-    final wasFlipped = widget.isFlipped;
+    final value = _turn.value;
+    // Where the card rested before the drag.
+    final from = _target;
+    // The finger's speed as half-turns per second; right is negative.
+    final spin = width <= 0
+        ? 0.0
+        : -details.velocity.pixelsPerSecond.dx / (width * _dragTravel);
+    final moved = value - from;
 
-    // Distance decides, but a quick flick counts even if the card barely moved.
-    final velocity = details.velocity.pixelsPerSecond.dx * _sign;
-    final flickedForward = velocity * (wasFlipped ? -1 : 1) > 700;
-    final crossedHalfway = wasFlipped ? value < 0.5 : value > 0.5;
+    // Distance decides, but a quick flick in the direction it was already
+    // going counts even if the card barely moved.
+    final flicked =
+        spin.abs() > 700 / (width <= 0 ? 1 : width * _dragTravel) &&
+        (moved == 0 || moved.sign == spin.sign);
+    final target = flicked ? from + spin.sign : value.roundToDouble();
 
-    if (crossedHalfway || flickedForward) {
-      widget.onFlip();
-      _animateTo(wasFlipped ? 0 : 1);
-    } else {
-      _animateTo(wasFlipped ? 1 : 0);
-    }
+    if (_side(target) != _wantedSide) widget.onFlip();
+    _animateTo(target);
   }
 
   void _onTap() {
@@ -148,9 +172,8 @@ class _FlipCardState extends State<FlipCard>
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
+      builder: (context, constraints) {
         final width = constraints.maxWidth;
-
         final enabled = widget.gesturesEnabled;
 
         return GestureDetector(
@@ -158,19 +181,22 @@ class _FlipCardState extends State<FlipCard>
           onTap: _onTap,
           onHorizontalDragStart: enabled ? _onDragStart : null,
           onHorizontalDragUpdate: enabled
-              ? (DragUpdateDetails d) => _onDragUpdate(d, width)
+              ? (details) => _onDragUpdate(details, width)
               : null,
-          onHorizontalDragEnd: enabled ? _onDragEnd : null,
+          onHorizontalDragEnd: enabled
+              ? (details) => _onDragEnd(details, width)
+              : null,
           child: AnimatedBuilder(
-            animation: _controller,
-            builder: (BuildContext context, Widget? child) {
-              final value = _controller.value;
-              final angle = value * math.pi * _sign;
-              final showingBack = value > 0.5;
+            animation: _turn,
+            builder: (context, child) {
+              final halfTurns = _turn.value;
+              final angle = halfTurns * math.pi;
+              final wrapped = halfTurns % 2;
+              final showingBack = wrapped > 0.5 && wrapped < 1.5;
 
               // Pull the card back slightly as it turns, so the edge doesn't
               // appear to clip through the screen at 90°.
-              final scale = 1 - 0.05 * math.sin(value * math.pi);
+              final scale = 1 - 0.05 * math.sin(angle).abs();
 
               return Transform(
                 alignment: Alignment.center,
