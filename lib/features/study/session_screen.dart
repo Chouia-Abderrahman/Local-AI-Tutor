@@ -88,7 +88,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 child: EmptyState(
                   icon: Icons.check_rounded,
                   title: 'Nothing to study right now',
-                  body: 'Reviews come back when they are due.',
+                  body: 'There are no questions here yet.',
                   action: OutlinedButton(
                     onPressed: () => context.go('/study'),
                     child: const Text('Back to Study'),
@@ -97,7 +97,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ),
             ],
           ),
-          SessionPhase.finished => _Finished(state: state),
+          SessionPhase.finished => _Finished(
+            state: state,
+            onMore: () => controller.start(
+              documentId: widget.documentId,
+              sectionId: widget.sectionId,
+            ),
+          ),
           _ when asking => Column(
             children: [
               _TopBar(
@@ -353,6 +359,8 @@ class _CardFooter extends StatelessWidget {
         'New card'
       else if (item.isNewQuestion)
         'New question'
+      else if (item.ahead)
+        'Extra practice'
       else
         'Review',
       if (item.pageStart != null) 'page ${item.pageStart}',
@@ -609,9 +617,12 @@ class _TypedAnswer extends StatelessWidget {
 }
 
 class _Finished extends StatelessWidget {
-  const _Finished({required this.state});
+  const _Finished({required this.state, required this.onMore});
 
   final SessionState state;
+
+  /// Starts another session of the same scope.
+  final VoidCallback onMore;
 
   @override
   Widget build(BuildContext context) {
@@ -668,6 +679,14 @@ class _Finished extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: FilledButton(
+                onPressed: onMore,
+                child: const Text('Keep studying'),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
                 onPressed: () => context.go('/study'),
                 child: const Text('Back to Study'),
               ),

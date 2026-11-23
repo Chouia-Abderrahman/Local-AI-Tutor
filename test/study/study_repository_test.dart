@@ -117,11 +117,13 @@ void main() {
     );
     expect(wrong.dueSoon(now), isTrue);
 
-    // Not due yet: the session is empty until the learning step passes.
-    expect(await repo.buildSession(), isEmpty);
+    // Not due yet: it is only offered as extra practice until the learning
+    // step passes.
+    expect((await repo.buildSession()).single.ahead, isTrue);
     now = now.add(const Duration(minutes: 20));
     final again = await repo.buildSession();
     expect(again.single.isNew, isFalse);
+    expect(again.single.ahead, isFalse);
     // The same wording isn't asked twice in a row.
     expect(again.single.question.id, isNot(item.question.id));
 
@@ -301,6 +303,90 @@ void main() {
     });
   });
 
+  group('no limit on studying', () {
+    test('new facts are not capped per day unless asked', () async {
+      for (var i = 0; i < 25; i++) {
+        await addFact('fact number $i');
+      }
+      final first = await repo.buildSession(maxItems: 10);
+      for (final item in first) {
+        await repo.recordReview(
+          factId: item.fact.id,
+          questionId: item.question.id,
+          rating: fsrs.Rating.good,
+        );
+      }
+      // Ten were started today; the next session still offers new facts.
+      final more = await repo.buildSession(maxItems: 10);
+      expect(more.where((i) => i.isNew), hasLength(10));
+      expect((await repo.overview()).newAvailable, 15);
+    });
+
+    test(
+      'with nothing waiting, known facts are offered ahead of schedule',
+      () async {
+        final fact = await addFact('osmosis moves water');
+        final item = (await repo.buildSession()).single;
+        for (var i = 0; i < 6; i++) {
+          final outcome = await repo.recordReview(
+            factId: fact,
+            questionId: item.question.id,
+            rating: fsrs.Rating.good,
+            correct: true,
+          );
+          if (outcome.state == fsrs.State.review) break;
+          now = outcome.due.add(const Duration(minutes: 1));
+        }
+        var overview = await repo.overview();
+        expect(overview.due, 0);
+        // The other two questions were never asked, so they come first...
+        expect(overview.unseen, 1);
+        // ...and once every question has had its turn, extra practice remains.
+        for (var i = 0; i < 2; i++) {
+          final next = (await repo.buildSession()).single;
+          await repo.recordReview(
+            factId: fact,
+            questionId: next.question.id,
+            rating: fsrs.Rating.good,
+            correct: true,
+          );
+        }
+        overview = await repo.overview();
+        expect(overview.waiting, 0);
+        expect(overview.ahead, 1);
+        expect(overview.canStudy, isTrue);
+        final practice = (await repo.buildSession()).single;
+        expect(practice.ahead, isTrue);
+        expect(practice.isNew, isFalse);
+      },
+    );
+
+    test('new facts take turns across topics, empty topics first', () async {
+      final other = await db
+          .into(db.sections)
+          .insert(
+            SectionsCompanion.insert(
+              documentId: documentId,
+              title: 'Energy',
+              level: 1,
+              ord: 1,
+              pageStart: 2,
+              pageEnd: 2,
+            ),
+          );
+      // Three important facts in Cells, one less important in Energy.
+      for (var i = 0; i < 3; i++) {
+        await addFact('cell fact $i', importance: 3);
+      }
+      sectionId = other;
+      await addFact('energy fact', importance: 1);
+      final session = await repo.buildSession();
+      final topics = session.map((i) => i.fact.sectionId).toList();
+      // Without turn-taking the Energy fact would come last of four.
+      expect(topics.take(2).toSet(), hasLength(2));
+    });
+  });
+
   group('unseen questions', () {
     /// Reviews a fact with [questionId] until it leaves its learning steps.
     Future<void> know(int fact, int questionId) async {
@@ -346,7 +432,13 @@ void main() {
         // All three kinds have been asked: nothing is left to introduce.
         overview = await repo.overview();
         expect(overview.unseen, 0);
-        expect(await repo.buildSession(), isEmpty);
+        expect(overview.waiting, 0);
+        expect(
+          await repo.buildSession(),
+          everyElement(
+            predicate<StudyItem>((i) => i.ahead && !i.isNewQuestion),
+          ),
+        );
       },
     );
 
@@ -375,7 +467,7 @@ void main() {
           correct: true,
         );
       }
-      expect(await repo.buildSession(), isEmpty);
+      expect((await repo.buildSession()).single.ahead, isTrue);
       await db
           .into(db.questions)
           .insert(

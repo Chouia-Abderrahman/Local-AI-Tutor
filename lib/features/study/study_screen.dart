@@ -83,21 +83,26 @@ class StudyScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 18),
                       FilledButton.icon(
-                        onPressed: value.waiting == 0
+                        onPressed: !value.canStudy
                             ? null
                             : () => context.go('/study/session'),
                         icon: const Icon(Icons.play_arrow_rounded, size: 22),
-                        label: const Text('Study everything'),
+                        label: Text(
+                          value.waiting == 0
+                              ? 'Keep studying'
+                              : 'Study everything',
+                        ),
                       ),
                       if (value.waiting == 0)
                         Padding(
                           padding: const EdgeInsets.only(top: 12),
                           child: Text(
-                            value.reviewedToday > 0
-                                ? 'All caught up. Reviews come back when '
-                                      'they are due.'
-                                : 'Generate questions for a document in the '
-                                      'Library first.',
+                            !value.canStudy
+                                ? 'Generate questions for a document in the '
+                                      'Library first.'
+                                : 'All caught up by the schedule. You can '
+                                      'keep going: cards not due yet are '
+                                      'offered as extra practice.',
                             style: context.text.bodySmall,
                           ),
                         ),
@@ -185,9 +190,10 @@ class _DocumentStudyTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final overview = ref.watch(studyOverviewProvider(doc.id)).value;
     final available = overview?.waiting ?? 0;
+    final canStudy = overview?.canStudy ?? false;
     final colors = context.colors;
     return Panel(
-      onTap: available == 0
+      onTap: !canStudy
           ? null
           : () => context.go('/study/session?doc=${doc.id}'),
       child: Row(
@@ -235,14 +241,14 @@ class _DocumentStudyTile extends ConsumerWidget {
                           dense: true,
                           color: colors.muted,
                         ),
-                      if (available == 0)
-                        Pill(label: 'All caught up', dense: true),
+                      if (available == 0 && canStudy)
+                        Pill(label: 'Caught up · study ahead', dense: true),
                     ],
                   ),
               ],
             ),
           ),
-          if (available > 0)
+          if (canStudy)
             Icon(
               Icons.play_circle_fill_rounded,
               color: colors.accent,

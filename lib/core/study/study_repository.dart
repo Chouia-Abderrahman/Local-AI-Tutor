@@ -17,6 +17,7 @@ class StudyItem {
     required this.question,
     required this.isNew,
     this.isNewQuestion = false,
+    this.ahead = false,
     this.pageStart,
     this.headingPath,
   });
@@ -29,6 +30,9 @@ class StudyItem {
 
   /// The fact is known, but this question has never been asked.
   final bool isNewQuestion;
+
+  /// Extra practice: the fact isn't due yet.
+  final bool ahead;
   final int? pageStart;
   final String? headingPath;
 
@@ -38,6 +42,7 @@ class StudyItem {
     question: question,
     isNew: isNew,
     isNewQuestion: isNewQuestion,
+    ahead: ahead,
     pageStart: pageStart,
     headingPath: headingPath,
   );
@@ -64,6 +69,7 @@ class StudyOverview {
     required this.newAvailable,
     required this.reviewedToday,
     this.unseen = 0,
+    this.ahead = 0,
   });
 
   final int due;
@@ -73,8 +79,15 @@ class StudyOverview {
   /// Facts that are not due but still have a question never asked.
   final int unseen;
 
-  /// Everything a session could offer right now.
+  /// Known facts that aren't due, which can be studied ahead of schedule.
+  final int ahead;
+
+  /// What is waiting by the schedule.
   int get waiting => due + newAvailable + unseen;
+
+  /// Whether a session has anything to offer: what is waiting, or else
+  /// extra practice.
+  bool get canStudy => waiting + ahead > 0;
 }
 
 /// How often and when a question was asked.
@@ -159,14 +172,18 @@ class StudyRepository {
     return DateTime(local.year, local.month, local.day).toUtc();
   }
 
-  /// Due cards first (most overdue first), then new facts up to the daily
-  /// limit, then facts that are known but have a question never asked. They
-  /// are interleaved so topics mix: two reviews, one new fact, one unseen
-  /// question, and what is left fills the session.
+  /// Due cards first (most overdue first), then new facts, then facts that
+  /// are known but have a question never asked. They are interleaved: two
+  /// reviews, one new fact, one unseen question. New facts take turns across
+  /// topics, topics with nothing started first, so none is left out.
+  ///
+  /// There is no daily limit unless [newPerDay] sets one. When nothing is
+  /// due, new or unseen, the session offers known facts ahead of schedule,
+  /// soonest due first, so there is always more to study.
   Future<List<StudyItem>> buildSession({
     int? documentId,
     int? sectionId,
-    int newPerDay = 20,
+    int? newPerDay,
     int maxItems = 40,
   }) async {
     final scope = await _scopedFacts(documentId, sectionId);
@@ -183,16 +200,10 @@ class StudyRepository {
     ]..sort((a, b) => a.due.compareTo(b.due));
     final carded = {for (final c in cards) c.factId};
 
-    final newToday = await _newStartedToday();
-    final newBudget = math.max(0, newPerDay - newToday);
-    final fresh =
-        [
-          for (final id in ids)
-            if (!carded.contains(id)) scope[id]!,
-        ]..sort((a, b) {
-          final byImportance = b.importance.compareTo(a.importance);
-          return byImportance != 0 ? byImportance : a.id.compareTo(b.id);
-        });
+    final newBudget = newPerDay == null
+        ? maxItems
+        : math.max(0, newPerDay - await _newStartedToday());
+    final fresh = _takeTurns(scope, carded);
 
     final dueItems = <StudyItem>[];
     for (final card in due) {
@@ -220,6 +231,29 @@ class StudyRepository {
       if (item != null && item.isNewQuestion) unseenItems.add(item);
     }
 
+    if (dueItems.isEmpty && newItems.isEmpty && unseenItems.isEmpty) {
+      // Nothing waiting: practice ahead of schedule.
+      final taken = <StudyItem>[];
+      for (final card in [...cards]..sort((a, b) => a.due.compareTo(b.due))) {
+        if (taken.length >= maxItems) break;
+        final item = await _itemFor(scope[card.factId]!, card);
+        if (item != null) {
+          taken.add(
+            StudyItem(
+              fact: item.fact,
+              question: item.question,
+              isNew: false,
+              isNewQuestion: item.isNewQuestion,
+              ahead: true,
+              pageStart: item.pageStart,
+              headingPath: item.headingPath,
+            ),
+          );
+        }
+      }
+      return taken;
+    }
+
     final session = <StudyItem>[];
     var d = 0, n = 0, u = 0;
     while (session.length < maxItems &&
@@ -233,6 +267,44 @@ class StudyRepository {
       if (u < unseenItems.length) session.add(unseenItems[u++]);
     }
     return session.take(maxItems).toList();
+  }
+
+  /// Facts with no card yet, ordered so that topics take turns: the topic
+  /// with the fewest facts started goes first, and within a topic the most
+  /// important fact does.
+  List<Fact> _takeTurns(Map<int, Fact> scope, Set<int> carded) {
+    final started = <int, int>{};
+    final waiting = <int, List<Fact>>{};
+    for (final fact in scope.values) {
+      if (carded.contains(fact.id)) {
+        started[fact.sectionId] = (started[fact.sectionId] ?? 0) + 1;
+      } else {
+        waiting.putIfAbsent(fact.sectionId, () => []).add(fact);
+      }
+    }
+    for (final facts in waiting.values) {
+      facts.sort((a, b) {
+        final byImportance = b.importance.compareTo(a.importance);
+        return byImportance != 0 ? byImportance : a.id.compareTo(b.id);
+      });
+    }
+    final topics = waiting.keys.toList()
+      ..sort((a, b) {
+        final byStarted = (started[a] ?? 0).compareTo(started[b] ?? 0);
+        return byStarted != 0 ? byStarted : a.compareTo(b);
+      });
+    final result = <Fact>[];
+    for (var round = 0; result.length < scope.length; round++) {
+      var added = false;
+      for (final topic in topics) {
+        if (round < waiting[topic]!.length) {
+          result.add(waiting[topic]![round]);
+          added = true;
+        }
+      }
+      if (!added) break;
+    }
+    return result;
   }
 
   /// The next question for a fact that was just answered, if it comes back
@@ -526,6 +598,7 @@ class StudyRepository {
       newAvailable: ids.length - cards.length,
       reviewedToday: reviewedToday,
       unseen: unseen.length,
+      ahead: cards.where((c) => c.due.isAfter(now)).length - unseen.length,
     );
   }
 
