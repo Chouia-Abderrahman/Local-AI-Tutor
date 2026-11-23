@@ -48,6 +48,13 @@ class QuestionImprover {
 
   static const _attempts = 2;
 
+  /// Feedback saying the marked answer itself is wrong.
+  static final _answerWrong = RegExp(
+    r'(answer|key|back).{0,30}(wrong|incorrect|not right|mistake)|'
+    r'(wrong|incorrect|bad).{0,15}(answer|key)',
+    caseSensitive: false,
+  );
+
   /// [otherQuestions] are the text of the document's other multiple-choice
   /// questions, so the rewrite doesn't copy one of them.
   Future<QuestionRewrite> improve({
@@ -57,10 +64,28 @@ class QuestionImprover {
     String? feedback,
     Iterable<String> otherQuestions = const [],
   }) {
-    final note = feedback?.trim();
+    var note = feedback?.trim();
+    final answerWrong =
+        note != null && _answerWrong.hasMatch(note) && question.type != 'cloze';
+    if (answerWrong) {
+      note = '$note (So the new answer must be different from the marked one.)';
+    }
     return switch (question.type) {
-      'mcq' => _mcq(question, fact, passage, note, otherQuestions),
-      'flashcard' => _flashcard(question, fact, passage, note),
+      'mcq' => _mcq(
+        question,
+        fact,
+        passage,
+        note,
+        otherQuestions,
+        mustChangeAnswer: answerWrong,
+      ),
+      'flashcard' => _flashcard(
+        question,
+        fact,
+        passage,
+        note,
+        mustChangeAnswer: answerWrong,
+      ),
       _ => _cloze(question, fact, passage, note),
     };
   }
@@ -72,8 +97,9 @@ class QuestionImprover {
     Fact fact,
     PassageInput passage,
     String? feedback,
-    Iterable<String> otherQuestions,
-  ) async {
+    Iterable<String> otherQuestions, {
+    bool mustChangeAnswer = false,
+  }) async {
     final oldDistractors = old.distractorsJson == null
         ? const <String>[]
         : [for (final d in jsonDecode(old.distractorsJson!) as List) '$d'];
@@ -116,6 +142,11 @@ class QuestionImprover {
       );
       if (failures.isNotEmpty) {
         reason = failures.first.description;
+        continue;
+      }
+      if (mustChangeAnswer &&
+          normalizeForMatch(answer) == normalizeForMatch(old.answer)) {
+        reason = 'It kept the answer you said was wrong.';
         continue;
       }
       if (similarity('$question $answer', '${old.prompt} ${old.answer}') >=
@@ -173,8 +204,9 @@ class QuestionImprover {
     Question old,
     Fact fact,
     PassageInput passage,
-    String? feedback,
-  ) async {
+    String? feedback, {
+    bool mustChangeAnswer = false,
+  }) async {
     var reason = 'It came out the same as before.';
     for (var attempt = 0; attempt < _attempts; attempt++) {
       final json = await model.json(
@@ -202,6 +234,11 @@ class QuestionImprover {
       );
       if (failures.isNotEmpty) {
         reason = failures.first.description;
+        continue;
+      }
+      if (mustChangeAnswer &&
+          normalizeForMatch(back) == normalizeForMatch(old.answer)) {
+        reason = 'It kept the answer you said was wrong.';
         continue;
       }
       if (similarity('$front $back', '${old.prompt} ${old.answer}') >= 0.95) {

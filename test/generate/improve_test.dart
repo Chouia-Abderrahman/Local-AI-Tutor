@@ -179,6 +179,33 @@ void main() {
       expect(model.stages, ['improve', 'blind', 'improve', 'blind']);
     });
 
+    test(
+      'when the answer is said to be wrong, a new answer is required',
+      () async {
+        // The old answer is Hypotonic; the model first keeps it, then fixes it.
+        final model = _Scripted({
+          'improve': [
+            _mcq(),
+            _mcq(
+              question:
+                  'What happens to a cell placed in a hypotonic solution?',
+              answer: 'It swells',
+              distractors: ['It shrinks', 'It divides', 'It freezes'],
+            ),
+          ],
+        }, blindPick: 'It swells');
+        final rewrite = await QuestionImprover(model).improve(
+          question: oldMcq,
+          fact: _fact,
+          passage: _input,
+          feedback: 'The marked answer is wrong',
+        );
+        expect(rewrite.answer, 'It swells');
+        expect(model.prompts.first, contains('must be different'));
+        expect(model.stages, ['improve', 'improve', 'blind']);
+      },
+    );
+
     test('copying another question of the document is refused', () async {
       final model = _Scripted({
         'improve': [_mcq(), _mcq()],
