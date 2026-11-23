@@ -1,3 +1,4 @@
+import 'chunk_generator.dart';
 import 'profile.dart';
 import 'prompts.dart';
 
@@ -45,6 +46,46 @@ Duration estimateGeneration({
     if (profile.critique) {
       seconds +=
           (tokens + 300 + questions * 80) / read + questions * 60 / write;
+    }
+  }
+  return Duration(seconds: seconds.round());
+}
+
+/// Estimated time to add [perFact] questions of [kind] to every fact of
+/// passages of [chunkTokens] tokens.
+Duration estimateMore({
+  required List<int> chunkTokens,
+  required MoreKind kind,
+  required int perFact,
+  required GenerationProfile profile,
+  required ModelSpeed speed,
+}) {
+  final read = speed.readTokensPerSecond;
+  final write = speed.writeTokensPerSecond;
+  var seconds = 0.0;
+  for (final tokens in chunkTokens) {
+    final facts = factsWanted(tokens);
+    final cards = facts * perFact;
+    switch (kind) {
+      case MoreKind.mcq:
+        final candidates =
+            facts *
+            (profile.candidatesPerFact > perFact
+                ? profile.candidatesPerFact
+                : perFact);
+        seconds +=
+            (tokens + 300 + facts * 90) / read + candidates * 130 / write;
+        seconds +=
+            profile.blindRuns *
+            ((tokens + 200 + candidates * 70) / read + candidates * 12 / write);
+        if (profile.critique) {
+          seconds +=
+              (tokens + 300 + candidates * 80) / read + candidates * 60 / write;
+        }
+      case MoreKind.flashcard:
+        seconds += (tokens + 250 + facts * 80) / read + cards * 40 / write;
+      case MoreKind.cloze:
+        seconds += (tokens + 250 + facts * 80) / read + cards * 10 / write;
     }
   }
   return Duration(seconds: seconds.round());

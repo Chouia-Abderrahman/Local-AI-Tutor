@@ -28,7 +28,13 @@ class GenerationProgressCard extends ConsumerWidget {
     final blocked = runner?.message != null && !active && !paused;
     final done = summary?.done ?? 0;
     final total = summary?.total ?? 0;
-    final stage = summary?.remainingByStage.containsKey(Stage.facts) ?? true
+    final more = summary?.remainingByStage.keys
+        .map(Stage.moreKind)
+        .nonNulls
+        .firstOrNull;
+    final stage = more != null
+        ? 'Writing more ${more.label.toLowerCase()}'
+        : summary?.remainingByStage.containsKey(Stage.facts) ?? true
         ? 'Finding facts, cloze cards and flashcards'
         : 'Writing and checking multiple-choice questions';
 

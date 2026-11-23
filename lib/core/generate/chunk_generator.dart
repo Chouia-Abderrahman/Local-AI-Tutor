@@ -10,6 +10,18 @@ import 'prompts.dart';
 
 enum QuestionType { cloze, flashcard, mcq }
 
+/// What a "generate more" run adds to facts that already have questions.
+enum MoreKind {
+  mcq('Multiple choice', QuestionType.mcq),
+  flashcard('Flashcards', QuestionType.flashcard),
+  cloze('Fill in the blank', QuestionType.cloze);
+
+  const MoreKind(this.label, this.type);
+
+  final String label;
+  final QuestionType type;
+}
+
 /// One passage (chunk) and what the prompts need to know about it.
 class PassageInput {
   const PassageInput({
@@ -56,11 +68,16 @@ class FactInput {
     required this.id,
     required this.statement,
     required this.quote,
+    this.existing = const [],
   });
 
   final int id;
   final String statement;
   final String quote;
+
+  /// What the fact already has of the kind being added, so new ones differ:
+  /// the questions' text, or for blanks the words already blanked.
+  final List<String> existing;
 }
 
 class QuestionDraft {
@@ -237,22 +254,30 @@ class ChunkGenerator {
 
   /// Stage 2: multiple-choice questions for [facts], then the blind check
   /// and (Thorough and up) the critique, keeping the best question per fact.
+  ///
+  /// [keepPerFact] above 1 keeps that many questions per fact (for "generate
+  /// more"); [variation] changes the sampling so a repeated request doesn't
+  /// replay a cached reply.
   Future<QuestionsResult> questions(
     PassageInput passage,
     List<FactInput> facts, {
     Iterable<String> existingQuestions = const [],
+    int keepPerFact = 1,
+    int variation = 0,
   }) async {
     if (facts.isEmpty || !profile.multipleChoice) {
       return const QuestionsResult([], []);
     }
     final rejections = <RejectionDraft>[];
     final depths = profile.usableDepths;
+    final candidatesPer = math.max(profile.candidatesPerFact, keepPerFact);
     final briefs = [
       for (final (i, fact) in facts.indexed)
         FactBrief(
           statement: fact.statement,
           quote: fact.quote,
           depth: depths[i % depths.length],
+          alreadyAsked: fact.existing,
         ),
     ];
 
@@ -271,18 +296,16 @@ class ChunkGenerator {
           text: passage.text,
           language: passage.language,
           facts: batch,
-          perFact: profile.candidatesPerFact,
+          perFact: candidatesPer,
           explanation: profile.explanation,
           context: profile.neighborContext ? passage.context : null,
         ),
         schema: mcqSchema(
-          maxQuestions: batch.length * profile.candidatesPerFact,
+          maxQuestions: batch.length * candidatesPer,
           distractorNotes: notes,
         ),
-        maxTokens:
-            120 +
-            batch.length * profile.candidatesPerFact * (notes ? 240 : 180),
-        temperature: 0.5,
+        maxTokens: 120 + batch.length * candidatesPer * (notes ? 240 : 180),
+        temperature: _temperature(0.5, variation),
       );
       for (final raw in _list(json['questions'])) {
         final item = _map(raw);
@@ -334,7 +357,8 @@ class ChunkGenerator {
       }
     }
 
-    // Keep the best candidate per fact, and drop near-duplicates across facts.
+    // Keep the best candidates per fact, and drop near-duplicates across
+    // facts.
     final byFact = <int, List<_Candidate>>{};
     for (final c in accepted) {
       byFact.putIfAbsent(c.factIndex, () => []).add(c);
@@ -343,17 +367,195 @@ class ChunkGenerator {
     final keptTexts = <String>[];
     for (final entry in byFact.entries) {
       final ranked = entry.value..sort((a, b) => b.score.compareTo(a.score));
-      final best = ranked.first;
-      final text = '${best.question} ${best.answer}';
-      if (keptTexts.any((other) => similarity(text, other) >= 0.8)) {
-        rejections.add(best.rejection(CheckFailure.duplicateQuestion.name));
-        continue;
+      var taken = 0;
+      for (final candidate in ranked) {
+        if (taken >= keepPerFact) break;
+        final text = '${candidate.question} ${candidate.answer}';
+        if (keptTexts.any((other) => similarity(text, other) >= 0.8)) {
+          rejections.add(
+            candidate.rejection(CheckFailure.duplicateQuestion.name),
+          );
+          continue;
+        }
+        keptTexts.add(text);
+        kept.add(candidate.toDraft(profile));
+        taken++;
       }
-      keptTexts.add(text);
-      kept.add(best.toDraft(profile));
     }
     return QuestionsResult(kept, rejections);
   }
+
+  /// Extra flashcards for facts that have some: [perFact] each, worded
+  /// differently from the ones they have. No blind check: a flashcard has no
+  /// options to mis-key, and the answer must come from the source.
+  Future<QuestionsResult> moreFlashcards(
+    PassageInput passage,
+    List<FactInput> facts, {
+    int perFact = 1,
+    int variation = 0,
+  }) async {
+    final rejections = <RejectionDraft>[];
+    final drafts = <QuestionDraft>[];
+    final perFactTaken = <int, List<String>>{};
+    for (final start in _starts(facts.length, _batch)) {
+      final batch = facts.sublist(
+        start,
+        math.min(start + _batch, facts.length),
+      );
+      final json = await model.json(
+        stage: 'flashcards',
+        messages: flashcardsMessages(
+          headingPath: passage.headingPath,
+          text: passage.text,
+          language: passage.language,
+          facts: [
+            for (final f in batch)
+              CardFactBrief(
+                statement: f.statement,
+                quote: f.quote,
+                alreadyHave: f.existing,
+              ),
+          ],
+          perFact: perFact,
+        ),
+        schema: flashcardsSchema(batch.length * perFact),
+        maxTokens: 80 + batch.length * perFact * 90,
+        temperature: _temperature(0.5, variation),
+      );
+      for (final raw in _list(json['cards'])) {
+        final item = _map(raw);
+        final number = (item['fact'] as num?)?.toInt() ?? 0;
+        if (number < 1 || number > batch.length) {
+          rejections.add(RejectionDraft('flashcard', 'unknownFact', item));
+          continue;
+        }
+        final index = start + number - 1;
+        final fact = facts[index];
+        final front = '${item['front'] ?? ''}'.trim();
+        final back = '${item['back'] ?? ''}'.trim();
+        final failures = checkFlashcard(
+          front: front,
+          back: back,
+          quote: fact.quote,
+          statement: fact.statement,
+        );
+        final taken = perFactTaken.putIfAbsent(index, () => []);
+        final payload = {'front': front, 'back': back};
+        if (failures.isNotEmpty) {
+          rejections.add(
+            RejectionDraft('flashcard', failures.first.name, payload),
+          );
+        } else if (taken.length >= perFact) {
+          continue;
+        } else if ([
+          ...fact.existing,
+          ...taken,
+        ].any((other) => similarity(front, other) >= 0.8)) {
+          rejections.add(
+            RejectionDraft(
+              'flashcard',
+              CheckFailure.duplicateQuestion.name,
+              payload,
+            ),
+          );
+        } else {
+          taken.add(front);
+          drafts.add(
+            QuestionDraft(
+              factIndex: index,
+              type: QuestionType.flashcard,
+              depth: Depth.recall,
+              prompt: front,
+              answer: back,
+            ),
+          );
+        }
+      }
+    }
+    return QuestionsResult(drafts, rejections);
+  }
+
+  /// Extra fill-in-the-blank cards: the model names other key terms of each
+  /// fact's sentence and code blanks them, so the sentence stays verbatim.
+  Future<QuestionsResult> moreClozes(
+    PassageInput passage,
+    List<FactInput> facts, {
+    int perFact = 1,
+    int variation = 0,
+  }) async {
+    final rejections = <RejectionDraft>[];
+    final drafts = <QuestionDraft>[];
+    final blanked = <int, List<String>>{};
+    for (final start in _starts(facts.length, _batch)) {
+      final batch = facts.sublist(
+        start,
+        math.min(start + _batch, facts.length),
+      );
+      final json = await model.json(
+        stage: 'blanks',
+        messages: blanksMessages(
+          headingPath: passage.headingPath,
+          text: passage.text,
+          language: passage.language,
+          facts: [
+            for (final f in batch)
+              CardFactBrief(
+                statement: f.statement,
+                quote: f.quote,
+                alreadyHave: f.existing,
+              ),
+          ],
+          perFact: perFact,
+        ),
+        schema: blanksSchema(batch.length * perFact),
+        maxTokens: 60 + batch.length * perFact * 30,
+        temperature: _temperature(0.4, variation),
+      );
+      for (final raw in _list(json['terms'])) {
+        final item = _map(raw);
+        final number = (item['fact'] as num?)?.toInt() ?? 0;
+        if (number < 1 || number > batch.length) {
+          rejections.add(RejectionDraft('cloze', 'unknownFact', item));
+          continue;
+        }
+        final index = start + number - 1;
+        final fact = facts[index];
+        final cloze = buildCloze(fact.quote, '${item['term'] ?? ''}');
+        final taken = blanked.putIfAbsent(
+          index,
+          () => [for (final e in fact.existing) normalizeForMatch(e)],
+        );
+        if (cloze == null) {
+          rejections.add(RejectionDraft('cloze', 'keyTermUnusable', item));
+        } else if (taken.length - fact.existing.length >= perFact) {
+          continue;
+        } else if (taken.contains(normalizeForMatch(cloze.answer))) {
+          rejections.add(
+            RejectionDraft('cloze', CheckFailure.duplicateQuestion.name, {
+              'term': cloze.answer,
+            }),
+          );
+        } else {
+          taken.add(normalizeForMatch(cloze.answer));
+          drafts.add(
+            QuestionDraft(
+              factIndex: index,
+              type: QuestionType.cloze,
+              depth: Depth.recall,
+              prompt: cloze.prompt,
+              answer: cloze.answer,
+            ),
+          );
+        }
+      }
+    }
+    return QuestionsResult(drafts, rejections);
+  }
+
+  /// Sampling temperature that shifts a little with [variation], so asking
+  /// again isn't answered from the cache. Zero leaves it as [base].
+  static double _temperature(double base, int variation) =>
+      base + (variation % 5) * 0.03;
 
   /// Runs the code checks; true when the candidate may continue.
   bool _admit(

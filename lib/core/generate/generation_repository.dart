@@ -13,6 +13,14 @@ import 'prompts.dart';
 abstract final class Stage {
   static const facts = 'facts';
   static const questions = 'questions';
+
+  /// Adds more questions of one kind to facts that already have some.
+  static String more(MoreKind kind) => 'more_${kind.name}';
+
+  /// The kind a [more] stage adds, or null for other stages.
+  static MoreKind? moreKind(String stage) => stage.startsWith('more_')
+      ? MoreKind.values.where((k) => 'more_${k.name}' == stage).firstOrNull
+      : null;
 }
 
 /// One unit of queued work.
@@ -25,6 +33,7 @@ class WorkItem {
     required this.stage,
     required this.attempts,
     required this.profile,
+    this.perFact = 1,
   });
 
   final int itemId;
@@ -34,6 +43,9 @@ class WorkItem {
   final String stage;
   final int attempts;
   final GenerationProfile profile;
+
+  /// For a "more" stage: how many to add per fact.
+  final int perFact;
 }
 
 class JobSummary {
@@ -84,26 +96,65 @@ class GenerationRepository {
   /// Queues generation for a document, or for some of its sections (and
   /// their subsections). Returns the job id, or null when there is nothing
   /// to do.
+  ///
+  /// With [more], the job only adds [perFact] more questions of that kind to
+  /// facts that exist already; passages without facts are left out.
   Future<int?> createJob({
     required int documentId,
     required GenerationProfile profile,
     List<int>? sectionIds,
     int priority = 0,
+    MoreKind? more,
+    int perFact = 1,
   }) {
     return db.transaction(() async {
-      final chunks = await _studyChunks(documentId, sectionIds);
+      var chunks = await _studyChunks(documentId, sectionIds);
+      if (more != null) {
+        final withFacts = {
+          for (final f
+              in await (db.select(db.facts)..where(
+                    (f) =>
+                        f.documentId.equals(documentId) &
+                        f.status.equals('active'),
+                  ))
+                  .get())
+            f.chunkId,
+        };
+        chunks = [
+          for (final c in chunks)
+            if (withFacts.contains(c.id)) c,
+        ];
+      }
       if (chunks.isEmpty) return null;
       final jobId = await db
           .into(db.jobs)
           .insert(
             JobsCompanion.insert(
               documentId: documentId,
-              scopeJson: jsonEncode({'sections': sectionIds}),
+              scopeJson: jsonEncode({
+                'sections': sectionIds,
+                if (more != null) 'more': more.name,
+                if (more != null) 'perFact': perFact,
+              }),
               profileJson: jsonEncode(profile.toJson()),
               priority: Value(priority),
               status: const Value('running'),
             ),
           );
+      if (more != null) {
+        for (final chunk in chunks) {
+          await db
+              .into(db.jobItems)
+              .insert(
+                JobItemsCompanion.insert(
+                  jobId: jobId,
+                  chunkId: chunk.id,
+                  stage: Stage.more(more),
+                ),
+              );
+        }
+        return jobId;
+      }
       for (final chunk in chunks) {
         await db
             .into(db.jobItems)
@@ -177,7 +228,7 @@ class GenerationRepository {
     final row = await db
         .customSelect(
           'SELECT ji.id, ji.job_id, ji.chunk_id, ji.stage, ji.attempts, '
-          'j.document_id, j.profile_json '
+          'j.document_id, j.profile_json, j.scope_json '
           'FROM job_items ji '
           'JOIN jobs j ON j.id = ji.job_id '
           'JOIN chunks c ON c.id = ji.chunk_id '
@@ -202,6 +253,10 @@ class GenerationRepository {
           jsonDecode(row.read<String>('profile_json')) as Map,
         ),
       ),
+      perFact:
+          (jsonDecode(row.read<String>('scope_json')) as Map)['perFact']
+              as int? ??
+          1,
     );
   }
 
@@ -393,6 +448,42 @@ class GenerationRepository {
     return result;
   }
 
+  /// Active facts of a chunk, each with what it already has of [kind], for
+  /// adding more: question text for multiple choice and flashcards, the
+  /// blanked words for fill-in-the-blank.
+  Future<List<FactInput>> factsForMore(int chunkId, MoreKind kind) async {
+    final facts =
+        await (db.select(db.facts)
+              ..where(
+                (f) => f.chunkId.equals(chunkId) & f.status.equals('active'),
+              )
+              ..orderBy([(f) => OrderingTerm(expression: f.quoteStart)]))
+            .get();
+    final result = <FactInput>[];
+    for (final fact in facts) {
+      final questions =
+          await (db.select(db.questions)..where(
+                (q) =>
+                    q.factId.equals(fact.id) &
+                    q.type.equals(kind.type.name) &
+                    q.status.equals('active'),
+              ))
+              .get();
+      result.add(
+        FactInput(
+          id: fact.id,
+          statement: fact.statement,
+          quote: fact.quote,
+          existing: [
+            for (final q in questions)
+              kind == MoreKind.cloze ? q.answer : q.prompt,
+          ],
+        ),
+      );
+    }
+    return result;
+  }
+
   /// "question answer" of the document's active questions, for dedupe.
   Future<List<String>> existingQuestionTexts(int documentId) async {
     final rows = await db
@@ -457,18 +548,23 @@ class GenerationRepository {
     required QuestionsResult result,
     required GenerationProfile profile,
     required String modelId,
+    bool replace = true,
   }) {
     return db.transaction(() async {
+      // With [replace], a better question retires the lower-quality ones of
+      // the same fact, once per fact. Without it (adding more), they stay.
+      final retired = <int>{};
       for (final question in result.questions) {
         final factId = facts[question.factIndex].id;
-        // A better question replaces lower-quality ones for the same fact.
-        await (db.update(db.questions)..where(
-              (q) =>
-                  q.factId.equals(factId) &
-                  q.type.equals(QuestionType.mcq.name) &
-                  q.status.equals('active'),
-            ))
-            .write(const QuestionsCompanion(status: Value('retired')));
+        if (replace && retired.add(factId)) {
+          await (db.update(db.questions)..where(
+                (q) =>
+                    q.factId.equals(factId) &
+                    q.type.equals(QuestionType.mcq.name) &
+                    q.status.equals('active'),
+              ))
+              .write(const QuestionsCompanion(status: Value('retired')));
+        }
         await _insertQuestion(factId, question, profile, modelId);
       }
       await _insertRejections(chunk, result.rejections);

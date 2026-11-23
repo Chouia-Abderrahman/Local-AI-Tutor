@@ -107,11 +107,15 @@ class FactBrief {
     required this.statement,
     required this.quote,
     required this.depth,
+    this.alreadyAsked = const [],
   });
 
   final String statement;
   final String quote;
   final Depth depth;
+
+  /// Questions this fact already has, which new ones must not repeat.
+  final List<String> alreadyAsked;
 }
 
 Map<String, Object?> mcqSchema({
@@ -173,7 +177,8 @@ List<LlmMessage> mcqMessages({
   final factList = [
     for (final (i, fact) in facts.indexed)
       '${i + 1}. [${fact.depth.name}] ${fact.statement} '
-          '(source: "${fact.quote}")',
+          '(source: "${fact.quote}")'
+          '${fact.alreadyAsked.isEmpty ? '' : '\n   Already asked, so ask something different: ${fact.alreadyAsked.map((q) => '"$q"').join('; ')}'}',
   ].join('\n');
   final depthHelp = {
     for (final fact in facts) fact.depth,
@@ -349,3 +354,114 @@ List<LlmMessage> critiqueMessages({
     ),
   ];
 }
+
+// ---------------------------------------------------------------------------
+// More cards for facts that already have some: flashcards and blanks.
+
+/// A fact as the "more cards" stages see it.
+class CardFactBrief {
+  const CardFactBrief({
+    required this.statement,
+    required this.quote,
+    this.alreadyHave = const [],
+  });
+
+  final String statement;
+  final String quote;
+
+  /// What the fact already has: flashcard fronts, or blanked words.
+  final List<String> alreadyHave;
+}
+
+String _cardFacts(List<CardFactBrief> facts, String haveLabel) => [
+  for (final (i, fact) in facts.indexed)
+    '${i + 1}. ${fact.statement} (source: "${fact.quote}")'
+        '${fact.alreadyHave.isEmpty ? '' : '\n   $haveLabel: ${fact.alreadyHave.map((q) => '"$q"').join('; ')}'}',
+].join('\n');
+
+Map<String, Object?> flashcardsSchema(int maxCards) => {
+  'type': 'object',
+  'properties': {
+    'cards': {
+      'type': 'array',
+      'minItems': 1,
+      'maxItems': maxCards,
+      'items': {
+        'type': 'object',
+        'properties': {
+          'fact': {'type': 'integer', 'minimum': 1, 'maximum': 50},
+          'front': {'type': 'string'},
+          'back': {'type': 'string'},
+        },
+        'required': ['fact', 'front', 'back'],
+        'additionalProperties': false,
+      },
+    },
+  },
+  'required': ['cards'],
+  'additionalProperties': false,
+};
+
+List<LlmMessage> flashcardsMessages({
+  required String headingPath,
+  required String text,
+  required String? language,
+  required List<CardFactBrief> facts,
+  required int perFact,
+}) => [
+  LlmMessage.system(_system(language)),
+  LlmMessage.user(
+    '${_passage(headingPath, text)}\n\n'
+    'Facts from the passage:\n${_cardFacts(facts, 'Flashcards it already has')}\n\n'
+    'For each fact, write $perFact new flashcard${perFact == 1 ? '' : 's'}, '
+    'giving the fact number for each. Ask about the fact from a different '
+    'angle than the flashcards it already has.\n'
+    '- front: a question. It must not contain the answer.\n'
+    '- back: the short answer, in a few words, that follows from the '
+    'passage.',
+  ),
+];
+
+Map<String, Object?> blanksSchema(int maxTerms) => {
+  'type': 'object',
+  'properties': {
+    'terms': {
+      'type': 'array',
+      'minItems': 1,
+      'maxItems': maxTerms,
+      'items': {
+        'type': 'object',
+        'properties': {
+          'fact': {'type': 'integer', 'minimum': 1, 'maximum': 50},
+          'term': {'type': 'string'},
+        },
+        'required': ['fact', 'term'],
+        'additionalProperties': false,
+      },
+    },
+  },
+  'required': ['terms'],
+  'additionalProperties': false,
+};
+
+List<LlmMessage> blanksMessages({
+  required String headingPath,
+  required String text,
+  required String? language,
+  required List<CardFactBrief> facts,
+  required int perFact,
+}) => [
+  LlmMessage.system(_system(language)),
+  LlmMessage.user(
+    '${_passage(headingPath, text)}\n\n'
+    'Facts from the passage, each with the sentence it comes from:\n'
+    '${_cardFacts(facts, 'Words already blanked')}\n\n'
+    'For each fact, choose $perFact other key word${perFact == 1 ? '' : 's'} '
+    'or short phrase${perFact == 1 ? '' : 's'} (1 to 4 words) that a student '
+    'should be able to fill in when it is blanked out of the sentence, and '
+    'give the fact number for each.\n'
+    '- term: copied exactly from the sentence, appearing in it once.\n'
+    '- It must be a meaningful term, not a common word, and different from '
+    'the words already blanked.',
+  ),
+];

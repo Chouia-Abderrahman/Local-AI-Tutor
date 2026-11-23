@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdf_study_assistant/core/db/database.dart';
+import 'package:pdf_study_assistant/core/generate/chunk_generator.dart';
 import 'package:pdf_study_assistant/core/generate/generation_repository.dart';
 import 'package:pdf_study_assistant/core/generate/json_model.dart';
 import 'package:pdf_study_assistant/core/generate/power_policy.dart';
@@ -22,6 +23,7 @@ class _FakeTeacher implements JsonModel {
   final Map<String, String> _answers = {};
   bool failFacts = false;
   void Function(String stage)? onCall;
+  void Function(String text)? onText;
 
   @override
   String get modelName => name;
@@ -37,6 +39,7 @@ class _FakeTeacher implements JsonModel {
     stages.add(stage);
     onCall?.call(stage);
     final text = messages.last.text;
+    onText?.call(text);
     switch (stage) {
       case 'facts':
         if (failFacts) throw LlmException('model crashed');
@@ -62,16 +65,35 @@ class _FakeTeacher implements JsonModel {
         };
       case 'mcq':
         final facts = RegExp(
-          r'^(\d+)\. \[\w+\] (.+?) \(source:',
+          r'^(\d+)\. \[\w+\] (.+?) \(source:(?:.*)\)(?:\n {3}Already asked, so ask something different: (.*))?$',
           multiLine: true,
         ).allMatches(text);
         return {
           'questions': [
             for (final f in facts)
               () {
-                final question =
-                    'Which term matters most in idea ${f.group(1)} of ${text.hashCode}?';
-                final answer = _longestWord(f.group(2)!);
+                // A fact that already has questions gets a new one about
+                // another word of its sentence.
+                final asked = f.group(3) == null
+                    ? 0
+                    : f.group(3)!.split('"; "').length;
+                final words =
+                    (f
+                        .group(2)!
+                        .replaceAll(RegExp(r'[^\p{L}\s]', unicode: true), '')
+                        .split(RegExp(r'\s+'))
+                        .toSet()
+                        .toList()
+                      ..sort((a, b) {
+                        final byLength = b.length.compareTo(a.length);
+                        return byLength != 0 ? byLength : a.compareTo(b);
+                      }));
+                final answer = asked == 0
+                    ? _longestWord(f.group(2)!)
+                    : words[asked % words.length];
+                final question = asked == 0
+                    ? 'Which term matters most in idea ${f.group(1)} of ${text.hashCode}?'
+                    : 'Round $asked: ${List.generate(6, (i) => 'w${((text.hashCode.abs() + int.parse(f.group(1)!) * 131) * (i + 3)) % 9973}').join(' ')} name another key word?';
                 _answers[question] = answer;
                 return {
                   'fact': int.parse(f.group(1)!),
@@ -81,6 +103,49 @@ class _FakeTeacher implements JsonModel {
                   'explanation': 'It is in the passage.',
                 };
               }(),
+          ],
+        };
+      case 'flashcards':
+        final facts = RegExp(
+          r'^(\d+)\. (.+?) \(source:',
+          multiLine: true,
+        ).allMatches(text);
+        return {
+          'cards': [
+            for (final f in facts)
+              {
+                'fact': int.parse(f.group(1)!),
+                'front':
+                    'From another angle, what is idea ${f.group(1)} of ${text.hashCode}?',
+                'back': _longestWord(f.group(2)!),
+              },
+          ],
+        };
+      case 'blanks':
+        final facts = RegExp(
+          r'^(\d+)\. .+? \(source: "(.+?)"\)(?:\n.*?: (.*))?$',
+          multiLine: true,
+        ).allMatches(text);
+        return {
+          'terms': [
+            for (final f in facts)
+              {
+                'fact': int.parse(f.group(1)!),
+                // The longest word of the sentence not blanked yet.
+                'term':
+                    (f
+                            .group(2)!
+                            .replaceAll(
+                              RegExp(r'[^\p{L}\s]', unicode: true),
+                              '',
+                            )
+                            .split(RegExp(r'\s+'))
+                            .toSet()
+                            .where((w) => !(f.group(3) ?? '').contains('"$w"'))
+                            .toList()
+                          ..sort((a, b) => b.length.compareTo(a.length)))
+                        .first,
+              },
           ],
         };
       case 'blind':
@@ -196,6 +261,130 @@ void main() {
     expect(await repo.watchOpenJobs(documentId).first, isEmpty);
     final counts = await repo.countsBySection(documentId);
     expect(counts.values.map((c) => c.mcq), [2, 2]);
+  });
+
+  group('generate more', () {
+    Future<void> generateAll(JsonModel model) async {
+      final r = runner(model);
+      await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.standard),
+      );
+      await r.idle();
+      teacher.stages.clear();
+    }
+
+    Future<List<Question>> active(String type) => (db.select(
+      db.questions,
+    )..where((q) => q.type.equals(type) & q.status.equals('active'))).get();
+
+    test('only multiple choice: old questions stay, new ones differ', () async {
+      final model = CachedJsonModel(teacher, db);
+      await generateAll(model);
+      final before = await active('mcq');
+      expect(before, hasLength(4));
+
+      final r = runner(model);
+      final jobId = await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.standard),
+        more: MoreKind.mcq,
+      );
+      await r.idle();
+
+      // Only multiple-choice work: no facts, flashcards or blanks.
+      expect(teacher.stages.toSet(), {'mcq', 'blind'});
+      final after = await active('mcq');
+      expect(after, hasLength(8));
+      expect(
+        before.every((q) => after.any((a) => a.id == q.id)),
+        isTrue,
+        reason: 'the old questions are still active',
+      );
+      expect(after.map((q) => q.prompt).toSet(), hasLength(8));
+      expect(await active('cloze'), hasLength(4));
+      expect(await active('flashcard'), hasLength(4));
+      expect((await repo.summary(jobId!))!.job.status, 'done');
+    });
+
+    test('a second request adds again, to all facts', () async {
+      final model = CachedJsonModel(teacher, db);
+      await generateAll(model);
+      for (var i = 0; i < 2; i++) {
+        final r = runner(model);
+        await r.start(
+          documentId: documentId,
+          profile: GenerationProfile.preset(Quality.standard),
+          more: MoreKind.mcq,
+        );
+        await r.idle();
+      }
+      expect(await active('mcq'), hasLength(12));
+    });
+
+    test('the model is told what each fact already has', () async {
+      final model = CachedJsonModel(teacher, db);
+      await generateAll(model);
+      final prompts = <String>[];
+      teacher.onText = prompts.add;
+      final r = runner(model);
+      await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.standard),
+        more: MoreKind.mcq,
+      );
+      await r.idle();
+      final asked = prompts.where((t) => t.contains('Already asked'));
+      expect(asked, isNotEmpty);
+      final first = (await active('mcq')).first.prompt;
+      expect(asked.any((t) => t.contains(first)), isTrue);
+    });
+
+    test('flashcards and blanks add cards of just that kind', () async {
+      final model = CachedJsonModel(teacher, db);
+      await generateAll(model);
+      final r = runner(model);
+      await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.quick),
+        more: MoreKind.flashcard,
+        perFact: 1,
+      );
+      await r.idle();
+      expect(teacher.stages.toSet(), {'flashcards'});
+      expect(await active('flashcard'), hasLength(8));
+      expect(await active('mcq'), hasLength(4));
+      expect(await active('cloze'), hasLength(4));
+
+      teacher.stages.clear();
+      await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.quick),
+        more: MoreKind.cloze,
+      );
+      await r.idle();
+      expect(teacher.stages.toSet(), {'blanks'});
+      final clozes = await active('cloze');
+      expect(clozes, hasLength(8));
+      // Each fact's blanks are different words.
+      for (final fact in await db.select(db.facts).get()) {
+        final answers = clozes
+            .where((q) => q.factId == fact.id)
+            .map((q) => q.answer)
+            .toList();
+        expect(answers.toSet(), hasLength(2));
+      }
+    });
+
+    test('nothing to add to before facts exist', () async {
+      final r = runner(teacher);
+      final jobId = await r.start(
+        documentId: documentId,
+        profile: GenerationProfile.preset(Quality.standard),
+        more: MoreKind.mcq,
+      );
+      expect(jobId, isNull);
+    });
   });
 
   test('an interrupted item is resumed after a restart', () async {

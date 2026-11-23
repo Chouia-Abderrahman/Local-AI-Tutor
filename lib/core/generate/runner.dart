@@ -72,15 +72,22 @@ class GenerationRunner {
   bool get isActive => _loop != null;
 
   /// Queues generation and starts working on it.
+  ///
+  /// With [more], adds [perFact] questions of that kind to facts that
+  /// already have some, instead of generating from scratch.
   Future<int?> start({
     required int documentId,
     required GenerationProfile profile,
     List<int>? sectionIds,
+    MoreKind? more,
+    int perFact = 1,
   }) async {
     final jobId = await repo.createJob(
       documentId: documentId,
       profile: profile,
       sectionIds: sectionIds,
+      more: more,
+      perFact: perFact,
     );
     if (jobId != null) {
       _paused = false;
@@ -259,6 +266,46 @@ class GenerationRunner {
           modelId: model.modelName,
         );
       }
+    } else if (Stage.moreKind(item.stage) case final kind?) {
+      final facts = await repo.factsForMore(chunk.id, kind);
+      if (facts.isNotEmpty) {
+        usedModel = true;
+        final QuestionsResult result;
+        switch (kind) {
+          case MoreKind.mcq:
+            result = await generator.questions(
+              passage,
+              facts,
+              existingQuestions: await repo.existingQuestionTexts(
+                chunk.documentId,
+              ),
+              keepPerFact: item.perFact,
+              variation: item.jobId,
+            );
+          case MoreKind.flashcard:
+            result = await generator.moreFlashcards(
+              passage,
+              facts,
+              perFact: item.perFact,
+              variation: item.jobId,
+            );
+          case MoreKind.cloze:
+            result = await generator.moreClozes(
+              passage,
+              facts,
+              perFact: item.perFact,
+              variation: item.jobId,
+            );
+        }
+        await repo.saveQuestions(
+          chunk: chunk,
+          facts: facts,
+          result: result,
+          profile: profile,
+          modelId: model.modelName,
+          replace: false,
+        );
+      }
     } else {
       final facts = await repo.factsNeedingQuestions(chunk.id, profile.quality);
       if (facts.isNotEmpty) {
@@ -300,7 +347,8 @@ class GenerationRunner {
           average(entry.key) ??
           (facts == null
               ? null
-              : entry.key == Stage.questions
+              : entry.key == Stage.questions ||
+                    entry.key == Stage.more(MoreKind.mcq)
               ? facts * 1.6
               : facts);
       if (perItem == null) return null;
