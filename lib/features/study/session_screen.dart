@@ -325,8 +325,14 @@ class _CardFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final fresh = item.isNew || item.isNewQuestion;
     final label = [
-      if (item.isNew) 'New card' else 'Review',
+      if (item.isNew)
+        'New card'
+      else if (item.isNewQuestion)
+        'New question'
+      else
+        'Review',
       if (item.pageStart != null) 'page ${item.pageStart}',
     ].join(' · ');
     return Padding(
@@ -338,7 +344,7 @@ class _CardFooter extends StatelessWidget {
             width: 5,
             height: 5,
             decoration: BoxDecoration(
-              color: item.isNew ? colors.accent : colors.faint,
+              color: fresh ? colors.accent : colors.faint,
               shape: BoxShape.circle,
             ),
           ),

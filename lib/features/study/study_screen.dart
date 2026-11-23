@@ -43,9 +43,8 @@ class StudyScreen extends ConsumerWidget {
               Text(_greeting(DateTime.now()), style: context.text.displaySmall),
               const SizedBox(height: 4),
               Text(switch (overview) {
-                AsyncData(:final value)
-                    when value.due + value.newAvailable > 0 =>
-                  '${plural(value.due + value.newAvailable, 'card')} '
+                AsyncData(:final value) when value.waiting > 0 =>
+                  '${plural(value.waiting, 'card')} '
                       'waiting for you',
                 AsyncData() => 'Nothing waiting right now',
                 _ => ' ',
@@ -61,7 +60,7 @@ class StudyScreen extends ConsumerWidget {
                         children: [
                           _Ring(
                             done: value.reviewedToday,
-                            waiting: value.due + value.newAvailable,
+                            waiting: value.waiting,
                           ),
                           const SizedBox(width: 20),
                           Expanded(
@@ -76,6 +75,7 @@ class StudyScreen extends ConsumerWidget {
                                   value: '${value.newAvailable}',
                                   label: 'New',
                                 ),
+                                Stat(value: '${value.unseen}', label: 'Unseen'),
                               ],
                             ),
                           ),
@@ -83,13 +83,13 @@ class StudyScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 18),
                       FilledButton.icon(
-                        onPressed: value.due + value.newAvailable == 0
+                        onPressed: value.waiting == 0
                             ? null
                             : () => context.go('/study/session'),
                         icon: const Icon(Icons.play_arrow_rounded, size: 22),
                         label: const Text('Study everything'),
                       ),
-                      if (value.due + value.newAvailable == 0)
+                      if (value.waiting == 0)
                         Padding(
                           padding: const EdgeInsets.only(top: 12),
                           child: Text(
@@ -120,7 +120,9 @@ class StudyScreen extends ConsumerWidget {
               SizedBox(height: documents.isEmpty ? 0 : 4),
               Text(
                 'Questions lean on multiple choice; a card turns over when '
-                'you answer, and shows where in the text it comes from.',
+                'you answer, and shows where in the text it comes from. '
+                'Unseen are questions of cards you know that haven\'t been '
+                'asked yet.',
                 textAlign: TextAlign.center,
                 style: context.text.bodySmall?.copyWith(color: colors.faint),
               ),
@@ -182,9 +184,7 @@ class _DocumentStudyTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final overview = ref.watch(studyOverviewProvider(doc.id)).value;
-    final available = overview == null
-        ? 0
-        : overview.due + overview.newAvailable;
+    final available = overview?.waiting ?? 0;
     final colors = context.colors;
     return Panel(
       onTap: available == 0
@@ -228,6 +228,12 @@ class _DocumentStudyTile extends ConsumerWidget {
                           label: '${overview.newAvailable} new',
                           dense: true,
                           color: colors.success,
+                        ),
+                      if (overview.unseen > 0)
+                        Pill(
+                          label: '${overview.unseen} unseen',
+                          dense: true,
+                          color: colors.muted,
                         ),
                       if (available == 0)
                         Pill(label: 'All caught up', dense: true),

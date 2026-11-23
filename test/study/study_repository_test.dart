@@ -208,32 +208,28 @@ void main() {
       expect(typedAnswerMatches('hypertonic', 'hypotonic'), isFalse);
     });
 
+    Question q(int id, String type) => Question(
+      id: id,
+      factId: 1,
+      type: type,
+      depth: 'recall',
+      prompt: '',
+      answer: '',
+      quality: 'standard',
+      modelId: '',
+      promptVersion: 1,
+      status: 'active',
+      createdAt: DateTime(2026),
+    );
+
     test('multiple choice leads; recall fills in behind it', () {
-      Question q(int id, String type) => Question(
-        id: id,
-        factId: 1,
-        type: type,
-        depth: 'recall',
-        prompt: '',
-        answer: '',
-        quality: 'standard',
-        modelId: '',
-        promptVersion: 1,
-        status: 'active',
-        createdAt: DateTime(2026),
-      );
       final qs = [q(1, 'cloze'), q(2, 'mcq'), q(3, 'flashcard')];
       expect(
         StudyRepository.chooseQuestion(qs, reviewed: false, stable: false).type,
         'mcq',
       );
-      // Multiple choice leads, for reviews too.
       expect(
         StudyRepository.chooseQuestion(qs, reviewed: true, stable: false).type,
-        'mcq',
-      );
-      expect(
-        StudyRepository.chooseQuestion(qs, reviewed: true, stable: true).type,
         'mcq',
       );
       // A well-known fact asked as multiple choice last time is asked as
@@ -247,28 +243,7 @@ void main() {
         ).type,
         'cloze',
       );
-      // Otherwise the wording just asked is avoided.
-      expect(
-        StudyRepository.chooseQuestion(
-          qs,
-          reviewed: true,
-          stable: true,
-          lastQuestionId: 1,
-        ).type,
-        'mcq',
-      );
-      // A lone multiple choice from an earlier session is asked again...
-      expect(
-        StudyRepository.chooseQuestion(
-          qs,
-          reviewed: true,
-          stable: false,
-          lastQuestionId: 2,
-          allowRepeat: true,
-        ).type,
-        'mcq',
-      );
-      // ...but not one that was just missed.
+      // The wording just asked is avoided.
       expect(
         StudyRepository.chooseQuestion(
           qs,
@@ -278,6 +253,147 @@ void main() {
         ).type,
         'cloze',
       );
+      // A fact with a single question asks it again.
+      expect(
+        StudyRepository.chooseQuestion(
+          [q(2, 'mcq')],
+          reviewed: true,
+          stable: false,
+          lastQuestionId: 2,
+        ).id,
+        2,
+      );
+    });
+
+    test('every question gets a turn before any is asked twice', () {
+      final qs = [q(1, 'mcq'), q(2, 'mcq'), q(3, 'cloze'), q(4, 'flashcard')];
+      final asks = <int, QuestionAsks>{};
+      final order = <int>[];
+      int? last;
+      for (var i = 0; i < 8; i++) {
+        final pick = StudyRepository.chooseQuestion(
+          qs,
+          reviewed: i > 0,
+          stable: false,
+          lastQuestionId: last,
+          asks: asks,
+        );
+        order.add(pick.id);
+        last = pick.id;
+        final old = asks[pick.id]?.count ?? 0;
+        asks[pick.id] = QuestionAsks(old + 1, DateTime(2026, 1, 1, i));
+      }
+      // The first four are all different, and the next four go round again
+      // in the same order.
+      expect(order.take(4).toSet(), {1, 2, 3, 4});
+      expect(order.skip(4), order.take(4));
+    });
+
+    test('a question never asked beats one asked often', () {
+      final qs = [q(1, 'mcq'), q(2, 'cloze')];
+      final pick = StudyRepository.chooseQuestion(
+        qs,
+        reviewed: true,
+        stable: false,
+        asks: {1: QuestionAsks(5, DateTime(2026))},
+      );
+      expect(pick.id, 2);
+    });
+  });
+
+  group('unseen questions', () {
+    /// Reviews a fact with [questionId] until it leaves its learning steps.
+    Future<void> know(int fact, int questionId) async {
+      for (var i = 0; i < 6; i++) {
+        final outcome = await repo.recordReview(
+          factId: fact,
+          questionId: questionId,
+          rating: fsrs.Rating.good,
+          correct: true,
+        );
+        if (outcome.state == fsrs.State.review) return;
+        now = outcome.due.add(const Duration(minutes: 1));
+      }
+      fail('the card never graduated');
+    }
+
+    test(
+      'a known fact that is not due is offered once with a question never asked',
+      () async {
+        final fact = await addFact('osmosis moves water');
+        final first = (await repo.buildSession()).single;
+        await know(fact, first.question.id);
+        // Not due, but two of its questions were never asked.
+        var overview = await repo.overview();
+        expect(overview.due, 0);
+        expect(overview.unseen, 1);
+        expect(overview.waiting, 1);
+
+        final seen = <int>{first.question.id};
+        for (var i = 0; i < 2; i++) {
+          final session = await repo.buildSession();
+          expect(session, hasLength(1));
+          expect(session.single.isNew, isFalse);
+          expect(session.single.isNewQuestion, isTrue);
+          expect(seen.add(session.single.question.id), isTrue);
+          await repo.recordReview(
+            factId: fact,
+            questionId: session.single.question.id,
+            rating: fsrs.Rating.good,
+            correct: true,
+          );
+        }
+        // All three kinds have been asked: nothing is left to introduce.
+        overview = await repo.overview();
+        expect(overview.unseen, 0);
+        expect(await repo.buildSession(), isEmpty);
+      },
+    );
+
+    test(
+      'due reviews, new facts and unseen questions share a session',
+      () async {
+        final known = await addFact('osmosis moves water');
+        final item = (await repo.buildSession()).single;
+        await know(known, item.question.id);
+        await addFact('ATP stores energy');
+        final session = await repo.buildSession();
+        expect(session.map((i) => i.isNew), [true, false]);
+        expect(session.last.isNewQuestion, isTrue);
+      },
+    );
+
+    test('a new question added to a known fact shows up', () async {
+      final fact = await addFact('osmosis moves water');
+      await know(fact, (await repo.buildSession()).single.question.id);
+      for (var i = 0; i < 2; i++) {
+        final item = (await repo.buildSession()).single;
+        await repo.recordReview(
+          factId: fact,
+          questionId: item.question.id,
+          rating: fsrs.Rating.good,
+          correct: true,
+        );
+      }
+      expect(await repo.buildSession(), isEmpty);
+      await db
+          .into(db.questions)
+          .insert(
+            QuestionsCompanion.insert(
+              factId: fact,
+              type: 'mcq',
+              depth: 'recall',
+              prompt: 'another mcq?',
+              answer: 'answer',
+              distractorsJson: const Value('["x","y","z"]'),
+              quality: 'standard',
+              modelId: 'test',
+              promptVersion: 1,
+            ),
+          );
+      final session = await repo.buildSession();
+      expect(session.single.question.prompt, 'another mcq?');
+      expect(session.single.isNewQuestion, isTrue);
     });
   });
 }

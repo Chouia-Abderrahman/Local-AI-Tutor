@@ -14,13 +14,19 @@ class StudyItem {
     required this.fact,
     required this.question,
     required this.isNew,
+    this.isNewQuestion = false,
     this.pageStart,
     this.headingPath,
   });
 
   final Fact fact;
   final Question question;
+
+  /// The fact has no card yet.
   final bool isNew;
+
+  /// The fact is known, but this question has never been asked.
+  final bool isNewQuestion;
   final int? pageStart;
   final String? headingPath;
 
@@ -45,11 +51,26 @@ class StudyOverview {
     required this.due,
     required this.newAvailable,
     required this.reviewedToday,
+    this.unseen = 0,
   });
 
   final int due;
   final int newAvailable;
   final int reviewedToday;
+
+  /// Facts that are not due but still have a question never asked.
+  final int unseen;
+
+  /// Everything a session could offer right now.
+  int get waiting => due + newAvailable + unseen;
+}
+
+/// How often and when a question was asked.
+class QuestionAsks {
+  const QuestionAsks(this.count, this.last);
+
+  final int count;
+  final DateTime? last;
 }
 
 class ReviewOutcome {
@@ -127,7 +148,9 @@ class StudyRepository {
   }
 
   /// Due cards first (most overdue first), then new facts up to the daily
-  /// limit, interleaved so topics mix.
+  /// limit, then facts that are known but have a question never asked. They
+  /// are interleaved so topics mix: two reviews, one new fact, one unseen
+  /// question, and what is left fills the session.
   Future<List<StudyItem>> buildSession({
     int? documentId,
     int? sectionId,
@@ -170,16 +193,32 @@ class StudyRepository {
       final item = await _itemFor(fact, null);
       if (item != null) newItems.add(item);
     }
+    // Known facts that aren't due, soonest first, that still have a question
+    // nobody has asked yet.
+    final unseenIds = await _factsWithUnseenQuestions([
+      for (final c in cards)
+        if (_canIntroduceQuestions(c, now)) c.factId,
+    ]);
+    final unseenItems = <StudyItem>[];
+    for (final card
+        in cards.where((c) => unseenIds.contains(c.factId)).toList()
+          ..sort((a, b) => a.due.compareTo(b.due))) {
+      if (unseenItems.length >= maxItems) break;
+      final item = await _itemFor(scope[card.factId]!, card);
+      if (item != null && item.isNewQuestion) unseenItems.add(item);
+    }
 
     final session = <StudyItem>[];
-    var d = 0, n = 0;
+    var d = 0, n = 0, u = 0;
     while (session.length < maxItems &&
-        (d < dueItems.length || n < newItems.length)) {
-      // Two reviews, then one new fact.
+        (d < dueItems.length ||
+            n < newItems.length ||
+            u < unseenItems.length)) {
       for (var k = 0; k < 2 && d < dueItems.length; k++) {
         session.add(dueItems[d++]);
       }
       if (n < newItems.length) session.add(newItems[n++]);
+      if (u < unseenItems.length) session.add(unseenItems[u++]);
     }
     return session.take(maxItems).toList();
   }
@@ -208,17 +247,13 @@ class StudyRepository {
             ))
             .get();
     if (questions.isEmpty) return null;
-    final lastAsked = avoidQuestionId ?? await _lastQuestionId(fact.id);
+    final asks = await _asks(fact.id);
     final question = chooseQuestion(
       questions,
       reviewed: card != null,
       stable: (card?.stability ?? 0) >= 7,
-      lastQuestionId: lastAsked,
-      // A fact that is settled in review may be asked the same multiple
-      // choice again (options shuffled); one just missed, or asked a moment
-      // ago, is asked differently.
-      allowRepeat:
-          avoidQuestionId == null && card?.state == fsrs.State.review.name,
+      lastQuestionId: avoidQuestionId ?? await _lastQuestionId(fact.id),
+      asks: asks,
     );
     final chunk = await (db.select(
       db.chunks,
@@ -227,27 +262,26 @@ class StudyRepository {
       fact: fact,
       question: question,
       isNew: card == null,
+      isNewQuestion: card != null && !asks.containsKey(question.id),
       pageStart: chunk?.pageStart,
       headingPath: chunk?.headingPath,
     );
   }
 
-  /// Multiple choice leads: it is what most facts are asked as, new or
-  /// reviewed. Recall questions (typed cloze, then flashcard) fill in behind
-  /// it, and a fact that is well known (stable) alternates: after a multiple
-  /// choice it is asked as recall, which tests more than recognizing the
-  /// answer. The question asked last time is avoided so the wording isn't
-  /// memorized, except that a lone multiple choice is asked again, with its
-  /// options shuffled, when [allowRepeat] says the last ask was long ago.
+  /// Picks the question to ask for a fact so that all of them get their turn:
+  /// the one asked the fewest times, then the one asked longest ago (never
+  /// asked comes first). Only then does the kind decide: multiple choice
+  /// leads, recall questions (typed cloze, then flashcard) fill in behind it,
+  /// and a fact that is well known (stable) goes to recall after a multiple
+  /// choice. The question asked last time is skipped when another exists, so
+  /// a missed fact is worded differently.
   static Question chooseQuestion(
     List<Question> questions, {
     required bool reviewed,
     required bool stable,
     int? lastQuestionId,
-    bool allowRepeat = false,
+    Map<int, QuestionAsks> asks = const {},
   }) {
-    List<Question> ofType(String type) =>
-        questions.where((q) => q.type == type).toList();
     final lastType = lastQuestionId == null
         ? null
         : questions.where((q) => q.id == lastQuestionId).firstOrNull?.type;
@@ -256,15 +290,77 @@ class StudyRepository {
         : stable && lastType == 'mcq'
         ? ['cloze', 'flashcard', 'mcq']
         : ['mcq', 'cloze', 'flashcard'];
-    for (final type in order) {
-      final all = ofType(type);
-      final fresh = all.where((q) => q.id != lastQuestionId).toList();
-      if (fresh.isNotEmpty) return fresh.first;
-      if (allowRepeat && type == 'mcq' && !stable && all.isNotEmpty) {
-        return all.first;
-      }
+    final pool = questions.length > 1
+        ? [
+            for (final q in questions)
+              if (q.id != lastQuestionId) q,
+          ]
+        : questions;
+    final never = DateTime.fromMillisecondsSinceEpoch(0);
+    final ranked = [...pool]
+      ..sort((a, b) {
+        final byCount = (asks[a.id]?.count ?? 0).compareTo(
+          asks[b.id]?.count ?? 0,
+        );
+        if (byCount != 0) return byCount;
+        final byLast = (asks[a.id]?.last ?? never).compareTo(
+          asks[b.id]?.last ?? never,
+        );
+        if (byLast != 0) return byLast;
+        final byType = order.indexOf(a.type).compareTo(order.indexOf(b.type));
+        return byType != 0 ? byType : a.id.compareTo(b.id);
+      });
+    return ranked.first;
+  }
+
+  /// How often and when each question of a fact was asked.
+  Future<Map<int, QuestionAsks>> _asks(int factId) async {
+    final count = db.reviews.id.count();
+    final last = db.reviews.reviewedAt.max();
+    final rows =
+        await (db.selectOnly(db.reviews)
+              ..addColumns([db.reviews.questionId, count, last])
+              ..where(
+                db.reviews.factId.equals(factId) &
+                    db.reviews.questionId.isNotNull(),
+              )
+              ..groupBy([db.reviews.questionId]))
+            .get();
+    return {
+      for (final r in rows)
+        r.read(db.reviews.questionId)!: QuestionAsks(
+          r.read(count) ?? 0,
+          r.read(last),
+        ),
+    };
+  }
+
+  /// A card that has graduated from learning and isn't due can be asked a
+  /// question it hasn't had yet. One still in a learning step comes back
+  /// soon on its own, and then picks such a question first.
+  bool _canIntroduceQuestions(FactCard card, DateTime now) =>
+      card.state == fsrs.State.review.name && card.due.isAfter(now);
+
+  /// Of [factIds], those with an active question that was never asked.
+  Future<Set<int>> _factsWithUnseenQuestions(List<int> factIds) async {
+    if (factIds.isEmpty) return {};
+    final result = <int>{};
+    // Stay under SQLite's limit on variables.
+    for (var i = 0; i < factIds.length; i += 500) {
+      final batch = factIds.sublist(i, math.min(i + 500, factIds.length));
+      final rows = await db
+          .customSelect(
+            'SELECT DISTINCT q.fact_id AS id FROM questions q '
+            "WHERE q.status = 'active' "
+            'AND q.fact_id IN (${List.filled(batch.length, '?').join(',')}) '
+            'AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.question_id = q.id)',
+            variables: [for (final id in batch) Variable.withInt(id)],
+            readsFrom: {db.questions, db.reviews},
+          )
+          .get();
+      result.addAll([for (final r in rows) r.read<int>('id')]);
     }
-    return questions.first;
+    return result;
   }
 
   /// When a fact would come back after each answer, for the labels on the
@@ -372,6 +468,10 @@ class StudyRepository {
       db.factCards,
     )..where((c) => c.factId.isIn(ids))).get();
     final now = _now;
+    final unseen = await _factsWithUnseenQuestions([
+      for (final c in cards)
+        if (_canIntroduceQuestions(c, now)) c.factId,
+    ]);
     final reviewedToday =
         await (db.selectOnly(db.reviews)
               ..addColumns([db.reviews.id.count()])
@@ -385,6 +485,7 @@ class StudyRepository {
       due: cards.where((c) => !c.due.isAfter(now)).length,
       newAvailable: ids.length - cards.length,
       reviewedToday: reviewedToday,
+      unseen: unseen.length,
     );
   }
 
