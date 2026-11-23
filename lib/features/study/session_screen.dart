@@ -9,6 +9,7 @@ import '../../app/ui.dart';
 import '../../core/generate/cloze.dart';
 import '../../core/study/study_repository.dart';
 import '../web/fact_check_sheet.dart';
+import 'improve_question_sheet.dart';
 import 'study_controllers.dart';
 import 'widgets/card_face.dart';
 import 'widgets/choice_list.dart';
@@ -46,6 +47,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   void dispose() {
     _typed.dispose();
     super.dispose();
+  }
+
+  Future<void> _improve(SessionState state) async {
+    final item = state.current;
+    if (item == null) return;
+    final updated = await showImproveQuestion(context, item: item);
+    if (updated == null || !mounted) return;
+    _typed.clear();
+    ref.read(sessionControllerProvider.notifier).applyImprovedQuestion(updated);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Question improved.')));
   }
 
   @override
@@ -92,6 +105,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 onClose: () => context.go('/study'),
                 onReport: (factIsWrong) =>
                     controller.report(factIsWrong: factIsWrong),
+                onImprove: () => _improve(state),
               ),
               Expanded(
                 child: Padding(
@@ -134,11 +148,13 @@ class _TopBar extends StatelessWidget {
     required this.state,
     required this.onClose,
     required this.onReport,
+    required this.onImprove,
   });
 
   final SessionState state;
   final VoidCallback onClose;
   final ValueChanged<bool> onReport;
+  final VoidCallback onImprove;
 
   @override
   Widget build(BuildContext context) {
@@ -169,10 +185,16 @@ class _TopBar extends StatelessWidget {
                 ),
               ),
               PopupMenuButton<String>(
-                tooltip: 'Report a problem',
+                tooltip: 'Fix or report this question',
                 icon: const Icon(Icons.more_horiz_rounded),
-                onSelected: (value) => onReport(value == 'fact'),
+                onSelected: (value) => value == 'improve'
+                    ? onImprove()
+                    : onReport(value == 'fact'),
                 itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: 'improve',
+                    child: Text('Improve this question'),
+                  ),
                   PopupMenuItem(
                     value: 'question',
                     child: Text('This question is bad'),

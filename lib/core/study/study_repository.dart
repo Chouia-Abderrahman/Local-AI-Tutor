@@ -5,6 +5,8 @@ import 'package:drift/drift.dart';
 import 'package:fsrs/fsrs.dart' as fsrs;
 
 import '../db/database.dart';
+import '../generate/improve.dart';
+import '../generate/prompts.dart' show promptVersion;
 import '../text/matching.dart';
 import 'mastery.dart';
 
@@ -29,6 +31,16 @@ class StudyItem {
   final bool isNewQuestion;
   final int? pageStart;
   final String? headingPath;
+
+  /// The same item with [question] swapped for an improved version.
+  StudyItem withQuestion(Question question) => StudyItem(
+    fact: fact,
+    question: question,
+    isNew: isNew,
+    isNewQuestion: isNewQuestion,
+    pageStart: pageStart,
+    headingPath: headingPath,
+  );
 
   List<String> get distractors => question.distractorsJson == null
       ? const []
@@ -456,6 +468,34 @@ class StudyRepository {
       await (db.update(db.facts)..where((f) => f.id.equals(question.factId)))
           .write(const FactsCompanion(status: Value('disputed')));
     }
+  }
+
+  /// Replaces a question with an improved version, in place: it keeps its id
+  /// and so its history of being asked. Returns the stored question.
+  Future<Question> replaceQuestion(
+    int questionId,
+    QuestionRewrite rewrite, {
+    required String modelId,
+  }) async {
+    await (db.update(
+      db.questions,
+    )..where((q) => q.id.equals(questionId))).write(
+      QuestionsCompanion(
+        prompt: Value(rewrite.prompt),
+        answer: Value(rewrite.answer),
+        distractorsJson: Value(
+          rewrite.distractors.isEmpty ? null : jsonEncode(rewrite.distractors),
+        ),
+        // Notes on each wrong option belonged to the old options.
+        explanation: Value(rewrite.explanation),
+        modelId: Value(modelId),
+        promptVersion: Value(promptVersion),
+        checksJson: Value(jsonEncode({'improved': true})),
+      ),
+    );
+    return (db.select(
+      db.questions,
+    )..where((q) => q.id.equals(questionId))).getSingle();
   }
 
   Future<StudyOverview> overview({int? documentId}) async {

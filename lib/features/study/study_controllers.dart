@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fsrs/fsrs.dart' as fsrs;
 
 import '../../app/providers.dart';
+import '../../core/db/database.dart';
 import '../../core/study/study_repository.dart';
 
 final studyRepositoryProvider = Provider<StudyRepository>(
@@ -264,6 +265,27 @@ class SessionController extends Notifier<SessionState> {
           q,
     ];
     _show(state.copyWith(queue: queue), state.index + 1);
+  }
+
+  /// Puts an improved version of a question in place of the old one, on the
+  /// card and wherever the same question waits in the queue. A card that is
+  /// still open is asked again with the new wording (nothing was recorded
+  /// for it); one already recorded keeps showing what was answered, and the
+  /// new wording applies the next time.
+  void applyImprovedQuestion(Question updated) {
+    if (state.current == null) return;
+    final open = !state.rated;
+    final queue = [
+      for (final (i, item) in state.queue.indexed)
+        item.question.id == updated.id && (open || i != state.index)
+            ? item.withQuestion(updated)
+            : item,
+    ];
+    if (open && state.current!.question.id == updated.id) {
+      _show(state.copyWith(queue: queue), state.index);
+    } else {
+      state = state.copyWith(queue: queue);
+    }
   }
 
   int _elapsedMs() => DateTime.now().difference(_shownAt).inMilliseconds;

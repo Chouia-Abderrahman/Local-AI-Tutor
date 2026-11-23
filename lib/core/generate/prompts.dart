@@ -465,3 +465,130 @@ List<LlmMessage> blanksMessages({
     'the words already blanked.',
   ),
 ];
+
+// ---------------------------------------------------------------------------
+// Improving one question the learner found bad.
+
+String _problem(String? feedback) => feedback == null || feedback.isEmpty
+    ? ''
+    : 'The student says what is wrong with it: "$feedback"\n';
+
+Map<String, Object?> improveMcqSchema() => {
+  'type': 'object',
+  'properties': {
+    'question': {'type': 'string'},
+    'answer': {'type': 'string'},
+    'distractors': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'minItems': 3,
+      'maxItems': 3,
+    },
+    'explanation': {'type': 'string'},
+  },
+  'required': ['question', 'answer', 'distractors', 'explanation'],
+  'additionalProperties': false,
+};
+
+List<LlmMessage> improveMcqMessages({
+  required String headingPath,
+  required String text,
+  required String? language,
+  required String quote,
+  required String question,
+  required String answer,
+  required List<String> distractors,
+  String? feedback,
+}) => [
+  LlmMessage.system(_system(language)),
+  LlmMessage.user(
+    '${_passage(headingPath, text)}\n\n'
+    'A multiple-choice question was written from this passage, about the '
+    'sentence: "$quote"\n'
+    'Question: $question\n'
+    'Marked correct: $answer\n'
+    'Wrong options: ${distractors.join(' | ')}\n'
+    '${_problem(feedback)}\n'
+    'Write an improved version of this question about the same sentence. '
+    'Fix whatever is unclear, wrong or too easy to guess, and do not repeat '
+    'the wording that was criticized.\n'
+    'Rules:\n'
+    '- The correct answer must follow from the passage. Keep it short: a '
+    'word or a phrase of at most 12 words, not a full sentence copied from '
+    'the passage.\n'
+    '- Write three wrong answers that are plausible, the same kind of thing '
+    'as the correct answer and about as long, but clearly wrong according '
+    'to the passage. Never use something the passage says is true as a '
+    'wrong answer.\n'
+    '- No "all of the above" or "none of the above".\n'
+    '- The question must not give away the answer.\n'
+    '- explanation: one sentence saying why the answer is right.',
+  ),
+];
+
+Map<String, Object?> improveFlashcardSchema() => {
+  'type': 'object',
+  'properties': {
+    'front': {'type': 'string'},
+    'back': {'type': 'string'},
+  },
+  'required': ['front', 'back'],
+  'additionalProperties': false,
+};
+
+List<LlmMessage> improveFlashcardMessages({
+  required String headingPath,
+  required String text,
+  required String? language,
+  required String quote,
+  required String front,
+  required String back,
+  String? feedback,
+}) => [
+  LlmMessage.system(_system(language)),
+  LlmMessage.user(
+    '${_passage(headingPath, text)}\n\n'
+    'A flashcard was written from this passage, about the sentence: '
+    '"$quote"\n'
+    'Front: $front\n'
+    'Back: $back\n'
+    '${_problem(feedback)}\n'
+    'Write an improved flashcard about the same sentence. Fix whatever is '
+    'unclear or wrong.\n'
+    '- front: a question. It must not contain the answer.\n'
+    '- back: the short answer, in a few words, that follows from the '
+    'passage.',
+  ),
+];
+
+Map<String, Object?> improveBlankSchema() => {
+  'type': 'object',
+  'properties': {
+    'term': {'type': 'string'},
+  },
+  'required': ['term'],
+  'additionalProperties': false,
+};
+
+List<LlmMessage> improveBlankMessages({
+  required String headingPath,
+  required String text,
+  required String? language,
+  required String quote,
+  required String blanked,
+  String? feedback,
+}) => [
+  LlmMessage.system(_system(language)),
+  LlmMessage.user(
+    '${_passage(headingPath, text)}\n\n'
+    'A fill-in-the-blank card was made from this sentence of the passage:\n'
+    '"$quote"\n'
+    'The blanked word was "$blanked". That blank was found to be a poor '
+    'choice.\n'
+    '${_problem(feedback)}\n'
+    'Choose a different key word or short phrase (1 to 4 words) of the '
+    'sentence to blank out: one a student can fill in only if they know the '
+    'idea.\n'
+    '- term: copied exactly from the sentence, appearing in it once.',
+  ),
+];
